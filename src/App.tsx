@@ -60,9 +60,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [mainView, searchQuery]);
 
-  // Agent-edit detector: poll blocks.db mtime every 2s.
+  // Agent-edit detector: poll blocks.db mtime every 2s. Only triggers a
+  // full reload when the on-disk mtime is meaningfully ahead of what we
+  // last saw — a 1-second slack window absorbs the in-flight mtime bumps
+  // from our own saves so typing in a 2k-block doc doesn't kick off a
+  // redundant `listBlocks` round-trip every 2s.
   useEffect(() => {
     if (!path) return;
+    const SLACK_MS = 1000;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -71,7 +76,8 @@ export default function App() {
         const known = useWorkspace.getState().lastMtime;
         if (known === 0) {
           useWorkspace.setState({ lastMtime: m });
-        } else if (m > known) {
+        } else if (m > known + SLACK_MS) {
+          // Probably an external (agent / restore) write — pull fresh state.
           useWorkspace.setState({ lastMtime: m });
           await reload();
         }
@@ -161,25 +167,38 @@ export default function App() {
             tagFilter={mainView === "tags" ? tagFilter : null}
           />
         </header>
-        {mainView === "canvas" ? (
-          searchQuery.trim() ? (
-            // Canvas-mode search: show a read-only list of matching blocks.
-            // Clicking a row jumps to that block on the canvas.
-            <TagsView
-              tagFilter={null}
-              searchQuery={searchQuery}
-              readOnly
-              onClearFilter={() => {}}
-              onClearSearch={() => setSearchQuery("")}
-              onJumpToBlock={jumpTo}
-            />
-          ) : (
-            <>
-              <CanvasEditor key={path} />
-              <ChatBox />
-            </>
-          )
-        ) : (
+        {/*
+          The CanvasEditor + ChatBox tree is mounted exactly once per
+          workspace (`key={path}`). On large docs (2k+ blocks) re-mounting
+          it is the single biggest cost when toggling between Canvas and
+          Tags. Instead of unmount/remount we hide it via `display: none`
+          while another view is active. State (cursor, scroll position,
+          ProseMirror history) is preserved.
+        */}
+        <div
+          className="flex-1 flex flex-col overflow-hidden"
+          style={{
+            display:
+              mainView === "canvas" && !searchQuery.trim() ? "flex" : "none",
+          }}
+        >
+          <CanvasEditor key={path} />
+          <ChatBox />
+        </div>
+
+        {mainView === "canvas" && searchQuery.trim() && (
+          // Canvas-mode search: read-only list of matching blocks.
+          <TagsView
+            tagFilter={null}
+            searchQuery={searchQuery}
+            readOnly
+            onClearFilter={() => {}}
+            onClearSearch={() => setSearchQuery("")}
+            onJumpToBlock={jumpTo}
+          />
+        )}
+
+        {mainView === "tags" && (
           <TagsView
             tagFilter={tagFilter}
             searchQuery={searchQuery}

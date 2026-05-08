@@ -131,6 +131,13 @@ html, body, #root {
   padding-left: 0.75rem;
   color: var(--color-neutral-600);
 }
+.ProseMirror p.is-empty::before,
+.ProseMirror h1.is-empty::before,
+.ProseMirror h2.is-empty::before,
+.ProseMirror h3.is-empty::before,
+.ProseMirror h4.is-empty::before,
+.ProseMirror h5.is-empty::before,
+.ProseMirror h6.is-empty::before,
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   color: inherit;
@@ -206,6 +213,16 @@ html, body, #root {
   pointer-events: none;
   z-index: 100;
   box-shadow: 0 0 0 0.5px oklch(0.95 0.04 250);
+}
+
+/* Skip layout/paint for off-screen blocks. Combined with `contain-intrinsic-size`,
+   the browser keeps element boxes in the DOM (so ProseMirror selection / coords
+   still work) but defers their paint cost until they scroll into the viewport.
+   `auto` for the y-size lets the browser remember each block's true height after
+   first measurement, which avoids scroll jumps once a block has been seen. */
+.mochi-block-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
 }
 
 /* fade the source block while it's being dragged */

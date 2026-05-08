@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ipc, type BlockInput, type StoredBlock, type TagCount } from "../lib/ipc";
+import { extractInlineTags } from "../lib/markdown";
 
 interface UndoEntry {
   /** Short label for diagnostics (not shown in UI yet). */
@@ -45,6 +46,15 @@ function snapshotBlocks(blocks: StoredBlock[]): BlockInput[] {
     heading: b.heading,
     heading_level: b.heading_level,
   }));
+}
+
+function localContentHash(content: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `local:${(hash >>> 0).toString(36)}:${content.length}`;
 }
 
 async function refreshAfterOpen(set: any, blocks: StoredBlock[], path: string) {
@@ -110,10 +120,74 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ blocks, tags });
   },
 
-  saveSnapshot: async (blocks, deletedIds = []) => {
-    const res = await ipc.saveBlocks(blocks, deletedIds);
-    const tags = await ipc.listTags();
-    set({ blocks: res.blocks, tags, lastMtime: res.mtime });
+  saveSnapshot: async (saved, deletedIds = []) => {
+    const res = await ipc.saveBlocks(saved, deletedIds);
+
+    // Patch the in-memory `blocks` array from the input batch instead of
+    // refetching the whole table. For a 2k-block doc this turns every save
+    // from a 2k-row IPC response + array replacement into a few rows
+    // updated in place.
+    set((s) => {
+      if (saved.length === 0 && deletedIds.length === 0) {
+        return { lastMtime: res.mtime };
+      }
+      const inputById = new Map(saved.map((b) => [b.id, b]));
+      const deletedSet = new Set(deletedIds);
+      const now = Date.now();
+
+      const next: StoredBlock[] = [];
+      const seen = new Set<string>();
+      for (const existing of s.blocks) {
+        if (deletedSet.has(existing.id)) continue;
+        const input = inputById.get(existing.id);
+        if (input) {
+          const contentChanged = input.content !== existing.content;
+          next.push({
+            ...existing,
+            content: input.content,
+            content_hash: contentChanged
+              ? localContentHash(input.content)
+              : existing.content_hash,
+            position: input.position,
+            parent_id: input.parent_id ?? null,
+            heading: input.heading ?? null,
+            heading_level: input.heading_level ?? null,
+            tags: extractInlineTags(input.content),
+            updated_at: now,
+          });
+          seen.add(existing.id);
+        } else {
+          next.push(existing);
+        }
+      }
+      // Brand-new blocks (id present in input but not in current state).
+      for (const input of saved) {
+        if (seen.has(input.id)) continue;
+        next.push({
+          id: input.id,
+          parent_id: input.parent_id ?? null,
+          position: input.position,
+          heading: input.heading ?? null,
+          heading_level: input.heading_level ?? null,
+          content: input.content,
+          content_hash: localContentHash(input.content),
+          tags: extractInlineTags(input.content),
+          manual_tags: false,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+      next.sort((a, b) => a.position - b.position);
+      return { blocks: next, lastMtime: res.mtime };
+    });
+
+    // The tags pane reads aggregated counts from the DB. Refresh only when
+    // an actual change happened — pure reorders / no-op saves don't change
+    // the tag counts.
+    if (res.changed_ids.length > 0 || deletedIds.length > 0) {
+      const tags = await ipc.listTags();
+      set({ tags });
+    }
   },
 
   refreshTags: async () => {
@@ -143,11 +217,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const toDelete: string[] = [];
     for (const id of currentIds) if (!beforeIdSet.has(id)) toDelete.push(id);
 
-    // Pop first so this undo doesn't accidentally re-push itself.
+    // Pop first so this undo doesn't accidentally re-push itself onto the
+    // stack via `saveSnapshot` running.
     set((s) => ({ undoStack: s.undoStack.slice(0, -1) }));
-
-    const res = await ipc.saveBlocks(entry.before, toDelete, "undo");
-    const tags = await ipc.listTags();
-    set({ blocks: res.blocks, tags, lastMtime: res.mtime });
+    await get().saveSnapshot(entry.before, toDelete);
   },
 }));

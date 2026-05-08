@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MarkdownIt from "markdown-it";
 // @ts-expect-error — no shipped types for markdown-it-task-lists
 import taskLists from "markdown-it-task-lists";
@@ -43,6 +43,199 @@ import { Hashtag } from "../editor/extensions/Hashtag";
 import { HashtagHighlight } from "../editor/extensions/HashtagHighlight";
 
 type Sort = "canvas" | "newest" | "oldest";
+
+const TAG_ROW_ESTIMATE = 132;
+const TAG_ROW_GAP = 8;
+const TAG_ROW_OVERSCAN = 8;
+
+interface VirtualItem<T> {
+  item: T;
+  start: number;
+}
+
+function findIndexAtOffset(offsets: number[], value: number): number {
+  if (offsets.length === 0) return 0;
+  let lo = 0;
+  let hi = offsets.length - 1;
+  let ans = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (offsets[mid] <= value) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
+function useVirtualRows<T extends { id: string }>(
+  items: T[],
+  scrollerRef: React.RefObject<HTMLDivElement | null>,
+  listRef: React.RefObject<HTMLDivElement | null>,
+  layoutKey: string,
+) {
+  const sizeByIdRef = useRef(new Map<string, number>());
+  const observersRef = useRef(new Map<string, { disconnect: () => void }>());
+  const [sizeVersion, setSizeVersion] = useState(0);
+  const [metrics, setMetrics] = useState({ scrollTop: 0, viewportHeight: 0 });
+
+  const updateMetrics = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const list = listRef.current;
+    const listTop = list
+      ? list.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top +
+        scroller.scrollTop
+      : 0;
+    const next = {
+      scrollTop: Math.max(0, scroller.scrollTop - listTop),
+      viewportHeight: scroller.clientHeight,
+    };
+    setMetrics((prev) =>
+      prev.scrollTop === next.scrollTop &&
+      prev.viewportHeight === next.viewportHeight
+        ? prev
+        : next,
+    );
+  }, [listRef, scrollerRef]);
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        updateMetrics();
+      });
+    };
+
+    updateMetrics();
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+
+    const resizeObserver = new ResizeObserver(schedule);
+    resizeObserver.observe(scroller);
+    if (listRef.current) resizeObserver.observe(listRef.current);
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      resizeObserver.disconnect();
+    };
+  }, [listRef, scrollerRef, updateMetrics]);
+
+  useEffect(() => {
+    updateMetrics();
+  }, [items.length, layoutKey, sizeVersion, updateMetrics]);
+
+  useEffect(
+    () => () => {
+      for (const observer of observersRef.current.values()) {
+        observer.disconnect();
+      }
+      observersRef.current.clear();
+    },
+    [],
+  );
+
+  const layout = useMemo(() => {
+    const offsets: number[] = [];
+    const sizes: number[] = [];
+    let totalSize = 0;
+    for (const item of items) {
+      offsets.push(totalSize);
+      const size = sizeByIdRef.current.get(item.id) ?? TAG_ROW_ESTIMATE;
+      sizes.push(size);
+      totalSize += size;
+    }
+    return { offsets, sizes, totalSize };
+  }, [items, sizeVersion]);
+
+  const virtualItems = useMemo(() => {
+    if (items.length === 0) return [] as VirtualItem<T>[];
+
+    const overscanPx = TAG_ROW_ESTIMATE * TAG_ROW_OVERSCAN;
+    const fromPx = Math.max(0, metrics.scrollTop - overscanPx);
+    const toPx = Math.min(
+      layout.totalSize,
+      metrics.scrollTop + metrics.viewportHeight + overscanPx,
+    );
+    const startIndex = Math.max(
+      0,
+      findIndexAtOffset(layout.offsets, fromPx) - TAG_ROW_OVERSCAN,
+    );
+    const endIndex = Math.min(
+      items.length - 1,
+      findIndexAtOffset(layout.offsets, toPx) + TAG_ROW_OVERSCAN,
+    );
+
+    const out: VirtualItem<T>[] = [];
+    for (let index = startIndex; index <= endIndex; index++) {
+      out.push({
+        item: items[index],
+        start: layout.offsets[index],
+      });
+    }
+    return out;
+  }, [items, layout, metrics]);
+
+  const measureElement = useCallback((id: string, el: HTMLDivElement | null) => {
+    observersRef.current.get(id)?.disconnect();
+    observersRef.current.delete(id);
+    if (!el) return;
+
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const next = el.getBoundingClientRect().height;
+      if (next <= 0) return;
+      const prev = sizeByIdRef.current.get(id);
+      if (prev == null || Math.abs(prev - next) > 1) {
+        sizeByIdRef.current.set(id, next);
+        setSizeVersion((v) => v + 1);
+      }
+    };
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(measure);
+    };
+
+    schedule();
+    const resizeObserver = new ResizeObserver(schedule);
+    resizeObserver.observe(el);
+    observersRef.current.set(id, {
+      disconnect: () => {
+        if (frame) cancelAnimationFrame(frame);
+        resizeObserver.disconnect();
+      },
+    });
+  }, []);
+
+  return {
+    totalSize: layout.totalSize,
+    virtualItems,
+    measureElement,
+  };
+}
+
+function virtualRowStyle(start: number): React.CSSProperties {
+  return {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    transform: `translateY(${start}px)`,
+    paddingBottom: TAG_ROW_GAP,
+    boxSizing: "border-box",
+  };
+}
 
 interface Props {
   tagFilter: string | null;
@@ -191,6 +384,8 @@ export function TagsView({
   // Set of block IDs matching the active FTS query, or null when no query.
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searching, setSearching] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // Debounced FTS lookup. We intersect the result IDs with the visible block
   // list — the actual list rendering still uses the full `StoredBlock` data
@@ -263,6 +458,21 @@ export function TagsView({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
+
+  const virtualLayoutKey = [
+    readOnly ? "readonly" : "editable",
+    selected.size,
+    searching ? "searching" : "idle",
+    sort,
+    tagFilter ?? "",
+    searchQuery,
+  ].join(":");
+  const { totalSize, virtualItems, measureElement } = useVirtualRows(
+    visible,
+    scrollRef,
+    listRef,
+    virtualLayoutKey,
   );
 
   const toggleSelect = (id: string) => {
@@ -504,7 +714,7 @@ export function TagsView({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 pt-4 pb-12">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-4 pb-12">
       <div className="max-w-3xl mx-auto">
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           {tagFilter ? (
@@ -632,13 +842,21 @@ export function TagsView({
         )}
 
         {readOnly ? (
-          <div>
-            {visible.map((b) => (
-              <ReadOnlyRow
+          <div
+            ref={listRef}
+            style={{ height: totalSize, position: "relative" }}
+          >
+            {virtualItems.map(({ item: b, start }) => (
+              <div
                 key={b.id}
-                block={b}
-                onJump={() => onJumpToBlock(b.id)}
-              />
+                ref={(el) => measureElement(b.id, el)}
+                style={virtualRowStyle(start)}
+              >
+                <ReadOnlyRow
+                  block={b}
+                  onJump={() => onJumpToBlock(b.id)}
+                />
+              </div>
             ))}
           </div>
         ) : (
@@ -651,27 +869,37 @@ export function TagsView({
               items={visible.map((b) => b.id)}
               strategy={verticalListSortingStrategy}
             >
-              {visible.map((b) => (
-                <BlockRow
-                  key={b.id}
-                  block={b}
-                  tagFilter={tagFilter}
-                  selected={selected.has(b.id)}
-                  autoFocus={pendingFocusId === b.id}
-                  onAutoFocused={() => setPendingFocusId(null)}
-                  dragHint={
-                    persistMode === "ephemeral"
-                      ? "Drag to rearrange in this view (Group on canvas to commit)"
-                      : persistMode === "slot-swap"
-                        ? `Drag to reorder among #${tagFilter} blocks on the canvas`
-                        : "Drag to reorder on canvas"
-                  }
-                  onSelect={() => toggleSelect(b.id)}
-                  onRemoveTag={() => removeFromTag(b.id)}
-                  onJump={() => onJumpToBlock(b.id)}
-                  onDelete={() => deleteBlock(b.id)}
-                />
-              ))}
+              <div
+                ref={listRef}
+                style={{ height: totalSize, position: "relative" }}
+              >
+                {virtualItems.map(({ item: b, start }) => (
+                  <div
+                    key={b.id}
+                    ref={(el) => measureElement(b.id, el)}
+                    style={virtualRowStyle(start)}
+                  >
+                    <BlockRow
+                      block={b}
+                      tagFilter={tagFilter}
+                      selected={selected.has(b.id)}
+                      autoFocus={pendingFocusId === b.id}
+                      onAutoFocused={() => setPendingFocusId(null)}
+                      dragHint={
+                        persistMode === "ephemeral"
+                          ? "Drag to rearrange in this view (Group on canvas to commit)"
+                          : persistMode === "slot-swap"
+                            ? `Drag to reorder among #${tagFilter} blocks on the canvas`
+                            : "Drag to reorder on canvas"
+                      }
+                      onSelect={() => toggleSelect(b.id)}
+                      onRemoveTag={() => removeFromTag(b.id)}
+                      onJump={() => onJumpToBlock(b.id)}
+                      onDelete={() => deleteBlock(b.id)}
+                    />
+                  </div>
+                ))}
+              </div>
             </SortableContext>
           </DndContext>
         )}
@@ -691,10 +919,15 @@ function ReadOnlyRow({
   block: StoredBlock;
   onJump: () => void;
 }) {
+  const html = useMemo(
+    () => renderMd.render(block.content || ""),
+    [block.content],
+  );
+
   return (
     <button
       onClick={onJump}
-      className="group w-full text-left mb-2 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:border-blue-400 dark:hover:border-blue-600 transition-colors"
+      className="group w-full text-left rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:border-blue-400 dark:hover:border-blue-600 transition-colors"
     >
       <div className="flex items-center gap-2 px-3 py-1 text-xs text-neutral-500 border-b border-neutral-100 dark:border-neutral-800">
         {block.heading && (
@@ -712,7 +945,7 @@ function ReadOnlyRow({
       </div>
       <div
         className="prose-block px-4 py-3 text-sm pointer-events-none"
-        dangerouslySetInnerHTML={{ __html: renderMd.render(block.content || "") }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
     </button>
   );
@@ -772,10 +1005,19 @@ function BlockRow({
   onJump: () => void;
   onDelete: () => void;
 }) {
-  const tags = useWorkspace((s) => s.tags);
-  const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
-  const tagsRef = useRef(tags);
-  useEffect(() => { tagsRef.current = tags; }, [tags]);
+  // Lazy edit: the row renders as a static markdown preview by default.
+  // We only mount Tiptap when the user actually wants to edit (click the
+  // body, or autoFocus from `+ Add block`). With 2k blocks this turns
+  // "switch to tags view" from a 2k-Tiptap-instance startup into a static
+  // HTML render — orders of magnitude faster.
+  const [editing, setEditing] = useState(autoFocus);
+
+  useEffect(() => {
+    if (autoFocus) {
+      setEditing(true);
+      onAutoFocused();
+    }
+  }, [autoFocus, onAutoFocused]);
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: block.id });
@@ -786,86 +1028,11 @@ function BlockRow({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  // Stable reference to the block for the debounced save closure.
-  const blockRef = useRef(block);
-  useEffect(() => { blockRef.current = block; }, [block]);
-  const saveSnapshotRef = useRef(saveSnapshot);
-  useEffect(() => { saveSnapshotRef.current = saveSnapshot; }, [saveSnapshot]);
-
-  const saveDebounced = useMemo(
-    () =>
-      debounce((md: string) => {
-        const b = blockRef.current;
-        // Tiptap-markdown escapes leading `#` as `\#` so it isn't read as a
-        // heading. Unescape inline-tag patterns (`\#tag` → `#tag`) so the
-        // Rust hashtag extractor sees them and they show up in the tag list.
-        const cleaned = unescapeInlineHashtags(md);
-        // Go through the workspace store so `blocks` state stays in sync —
-        // otherwise tab-switching back to this view would show stale content.
-        void saveSnapshotRef.current(
-          [asBlockInput(b, { content: cleaned })],
-          [],
-        );
-      }, 400),
-    [],
-  );
-
-  const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        link: {
-          openOnClick: false,
-          autolink: true,
-          HTMLAttributes: { class: "mochi-link" },
-        },
-      }),
-      Markdown.configure({ html: false, linkify: true, breaks: false }),
-      Placeholder.configure({
-        placeholder: "Empty block — start typing…",
-        showOnlyWhenEditable: true,
-      }),
-      Hashtag.configure({
-        getTags: () => tagsRef.current.map((t) => t.tag),
-      }),
-      HashtagHighlight,
-    ],
-    content: block.content,
-    onUpdate: ({ editor }) => {
-      const md: string = (editor.storage as any).markdown.getMarkdown();
-      saveDebounced(md);
-    },
-  });
-
-  // Focus a freshly-created block.
-  useEffect(() => {
-    if (autoFocus && editor) {
-      editor.commands.focus("end");
-      onAutoFocused();
-    }
-  }, [autoFocus, editor, onAutoFocused]);
-
-  // External content changes (canvas edit, agent write, restore) → update
-  // the row editor — but only when it's not focused, so we don't clobber an
-  // in-flight typing session.
-  useEffect(() => {
-    if (!editor || editor.isFocused) return;
-    const current: string =
-      (editor.storage as any).markdown?.getMarkdown?.() ?? "";
-    if (current.trim() !== block.content.trim()) {
-      editor.commands.setContent(block.content, { emitUpdate: false });
-    }
-  }, [block.content, editor]);
-
-  // Flush (not cancel) on unmount — otherwise an in-flight edit still inside
-  // the 400ms debounce window would be silently dropped when the row leaves
-  // the view (tab switch, filter change, etc.).
-  useEffect(() => () => saveDebounced.flush(), [saveDebounced]);
-
   return (
     <article
       ref={setNodeRef}
       style={style}
-      className={`group mb-2 rounded-lg border bg-white dark:bg-neutral-900 ${
+      className={`group rounded-lg border bg-white dark:bg-neutral-900 ${
         selected
           ? "border-blue-400 dark:border-blue-600 ring-1 ring-blue-200 dark:ring-blue-800"
           : "border-neutral-200 dark:border-neutral-800"
@@ -915,9 +1082,126 @@ function BlockRow({
           <Trash2 size={13} />
         </button>
       </div>
-      <div className="px-4 py-3 text-sm">
-        <EditorContent editor={editor} />
-      </div>
+      {editing ? (
+        <EditableBody
+          block={block}
+          onBlurOut={() => setEditing(false)}
+        />
+      ) : (
+        <ReadOnlyBody
+          block={block}
+          onActivate={() => setEditing(true)}
+        />
+      )}
     </article>
+  );
+}
+
+function ReadOnlyBody({
+  block,
+  onActivate,
+}: {
+  block: StoredBlock;
+  onActivate: () => void;
+}) {
+  const html = useMemo(
+    () => renderMd.render(block.content || ""),
+    [block.content],
+  );
+
+  return (
+    <div
+      onClick={onActivate}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
+      className="prose-block px-4 py-3 text-sm cursor-text"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function EditableBody({
+  block,
+  onBlurOut,
+}: {
+  block: StoredBlock;
+  onBlurOut: () => void;
+}) {
+  const tags = useWorkspace((s) => s.tags);
+  const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
+  const tagsRef = useRef(tags);
+  useEffect(() => { tagsRef.current = tags; }, [tags]);
+
+  const blockRef = useRef(block);
+  useEffect(() => { blockRef.current = block; }, [block]);
+  const saveSnapshotRef = useRef(saveSnapshot);
+  useEffect(() => { saveSnapshotRef.current = saveSnapshot; }, [saveSnapshot]);
+
+  const saveDebounced = useMemo(
+    () =>
+      debounce((md: string) => {
+        const b = blockRef.current;
+        const cleaned = unescapeInlineHashtags(md);
+        void saveSnapshotRef.current(
+          [asBlockInput(b, { content: cleaned })],
+          [],
+        );
+      }, 400),
+    [],
+  );
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        link: {
+          openOnClick: false,
+          autolink: true,
+          HTMLAttributes: { class: "mochi-link" },
+        },
+      }),
+      Markdown.configure({ html: false, linkify: true, breaks: false }),
+      Placeholder.configure({
+        placeholder: "Empty block — start typing…",
+        showOnlyWhenEditable: true,
+      }),
+      Hashtag.configure({
+        getTags: () => tagsRef.current.map((t) => t.tag),
+      }),
+      HashtagHighlight,
+    ],
+    content: block.content,
+    autofocus: "end",
+    onUpdate: ({ editor }) => {
+      const md: string = (editor.storage as any).markdown.getMarkdown();
+      saveDebounced(md);
+    },
+    onBlur: () => {
+      // Flush any pending save before falling back to the read-only view.
+      saveDebounced.flush();
+      onBlurOut();
+    },
+  });
+
+  useEffect(() => {
+    if (!editor || editor.isFocused) return;
+    const current: string =
+      (editor.storage as any).markdown?.getMarkdown?.() ?? "";
+    if (current.trim() !== block.content.trim()) {
+      editor.commands.setContent(block.content, { emitUpdate: false });
+    }
+  }, [block.content, editor]);
+
+  useEffect(() => () => saveDebounced.flush(), [saveDebounced]);
+
+  return (
+    <div className="px-4 py-3 text-sm">
+      <EditorContent editor={editor} />
+    </div>
   );
 }

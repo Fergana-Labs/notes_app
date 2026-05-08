@@ -1,6 +1,6 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { GripVertical, Plus } from "lucide-react";
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { TextSelection } from "@tiptap/pm/state";
 import { BlockMenu } from "./BlockMenu";
 import type { StoredBlock } from "../lib/ipc";
@@ -25,10 +25,17 @@ function countLeafTextblocks(node: any): number {
 
 /**
  * React NodeView for the `mochiBlock` schema node. Renders the chrome around
- * the editable content: a left-side gutter (`+` insert + grip drag handle),
- * the inner `<NodeViewContent>`, and a tag-chip footer.
+ * the editable content: a left-side gutter (`+` insert + grip drag handle)
+ * and the inner `<NodeViewContent>`.
+ *
+ * Wrapped in `React.memo` below — see `BlockView` (the exported binding) for
+ * the comparator. ProseMirror nodes are immutable, so when the doc changes
+ * only the modified mochiBlock gets a new `node` reference; siblings keep
+ * their previous reference and skip re-render entirely. This is the single
+ * biggest perf win for many-block documents (2k+ blocks) — without memo,
+ * every keystroke would re-render every BlockView.
  */
-export function BlockView(props: NodeViewProps) {
+function BlockViewInner(props: NodeViewProps) {
   const { node, editor, getPos } = props;
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
 
@@ -257,3 +264,21 @@ export function BlockView(props: NodeViewProps) {
     </NodeViewWrapper>
   );
 }
+
+export const BlockView = memo(BlockViewInner, (prev, next) => {
+  // PM nodes are immutable, so reference equality is correct + cheap for
+  // the node itself.
+  if (prev.node !== next.node) return false;
+  if (prev.selected !== next.selected) return false;
+  // `decorations` is a fresh array on every Tiptap render, even when the
+  // contained Decoration entries are reference-stable. Compare element-wise
+  // — most blocks have an empty array, so this is the cheapest path most
+  // of the time.
+  const a = prev.decorations as unknown as unknown[];
+  const b = next.decorations as unknown as unknown[];
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+});

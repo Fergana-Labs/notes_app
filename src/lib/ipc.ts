@@ -65,7 +65,6 @@ export interface BlockInput {
 }
 
 export interface SaveResult {
-  blocks: StoredBlock[];
   changed_ids: string[];
   mtime: number;
 }

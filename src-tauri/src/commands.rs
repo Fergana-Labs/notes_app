@@ -157,24 +157,22 @@ pub struct SaveBlocksArgs {
 
 #[derive(Debug, Serialize)]
 pub struct SaveResult {
-    pub blocks: Vec<StoredBlock>,
     pub changed_ids: Vec<String>,
     pub mtime: i64,
 }
 
-/// Save the editor's current block snapshot. The frontend sends the full block
-/// list (in document order, with positions and heading metadata) plus any IDs
-/// that disappeared since the last save. The DB layer figures out which rows
-/// actually changed and skips writes for the rest.
+/// Save a (typically diff-only) batch of blocks plus any deletions. Returns
+/// the IDs whose content actually changed (per the DB's hash check) plus the
+/// new `blocks.db` mtime — the frontend already has the latest content
+/// locally, so there's no point re-fetching the whole table over IPC after
+/// every keystroke.
 #[tauri::command]
 pub fn save_blocks(args: SaveBlocksArgs, state: State<'_, AppState>) -> Result<SaveResult> {
     state.with(|ws| {
         let source = args.source.unwrap_or_else(|| "canvas".to_string());
         let changed = db::save_snapshot(&mut ws.db, &args.blocks, &args.deleted_ids, &source)?;
-        let blocks = db::list_blocks(&ws.db)?;
         let mtime = blocks_db_mtime(&ws.root);
         Ok(SaveResult {
-            blocks,
             changed_ids: changed,
             mtime,
         })

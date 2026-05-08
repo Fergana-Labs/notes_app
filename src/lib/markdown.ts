@@ -68,8 +68,6 @@ export function docToMarkdown(editor: Editor): string {
   return out.endsWith("\n") ? out : out + "\n";
 }
 
-const BLOCK_MARKER = /<!-- block:([0-9A-HJKMNP-TV-Z]{26}) -->\n/g;
-
 /**
  * Tiptap-markdown's serializer escapes `#` at the start of a line as `\#`
  * so it isn't mistaken for a heading. That's the right call for actual
@@ -86,21 +84,80 @@ export function unescapeInlineHashtags(md: string): string {
   return md.replace(/(^|\n)\\#(?=[A-Za-z])/g, "$1#");
 }
 
+const TAG_RE = /(?:^|\s)#([A-Za-z][A-Za-z0-9_\-/]*)/g;
+const URL_RE = /https?:\/\/\S+/g;
+
+/**
+ * Extract inline `#hashtags` from a block's markdown content. Mirrors the
+ * Rust-side `parser::extract_hashtags` so the frontend can update the tags
+ * column locally after a save without an IPC round-trip.
+ */
+export function extractInlineTags(content: string): string[] {
+  const tags: string[] = [];
+  let inCode = false;
+  for (const line of content.split("\n")) {
+    if (line.trim().startsWith("```")) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    const stripped = line.replace(URL_RE, "");
+    TAG_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = TAG_RE.exec(stripped)) !== null) {
+      const t = m[1].toLowerCase();
+      if (!tags.includes(t)) tags.push(t);
+    }
+  }
+  return tags;
+}
+
 /**
  * Snapshot the editor's current block list as `BlockInput`s ready to send to
- * `ipc.saveBlocks`. Each item carries its serialized markdown content,
- * structural position, and heading/parent_id metadata derived from the
- * heading-depth stack.
+ * `ipc.saveBlocks`.
  *
- * Implementation: serialize the whole doc once via the tiptap-markdown
- * serializer (which emits `<!-- block:ID -->\n<inner>\n\n` per block), split
- * on the ID markers, and zip with the structural walk.
+ * Per-node markdown is **cached by ProseMirror node reference**. PM nodes are
+ * immutable, so for any block the user hasn't touched since the last save,
+ * the cached markdown is reused — meaning a save tick on a 2k-block doc
+ * goes from a full-doc serialize (100-200 ms) to one node serialized
+ * (<1 ms) plus a cheap iteration. The reload effect in CanvasEditor still
+ * works because cache entries for replaced nodes get GC'd via WeakMap.
  */
-export function snapshotBlocks(editor: Editor): BlockInput[] {
+const nodeContentCache = new WeakMap<object, string>();
+const BLOCK_MARKER_PREFIX = /^<!-- block:[0-9A-HJKMNP-TV-Z]{26} -->\n/;
+
+function markdownFromMochiBlock(editor: Editor, node: any): string | null {
   const serializer = (editor.storage as any).markdown?.serializer;
-  if (!serializer) return [];
-  const fullMd: string = serializer.serialize(editor.state.doc);
-  const contentById = splitMarkdownByMarkers(fullMd);
+  if (!serializer) return null;
+
+  let content = nodeContentCache.get(node);
+  if (content === undefined) {
+    // Serialize just this block. mochiBlock's storage.markdown.serialize
+    // hook (Block.ts) writes `<!-- block:ID -->\n<inner>\n\n` — strip
+    // the marker and trailing newlines, then unescape any `\#tag` that
+    // tiptap-markdown's `esc()` produced.
+    const md: string = serializer.serialize(node);
+    content = unescapeInlineHashtags(
+      md.replace(BLOCK_MARKER_PREFIX, "").replace(/\s+$/, ""),
+    );
+    nodeContentCache.set(node, content);
+  }
+  return content;
+}
+
+function headingFromMochiBlock(node: any) {
+  let heading: string | null = null;
+  let heading_level: number | null = null;
+  const first = node.firstChild;
+  if (first && first.type.name === "heading") {
+    heading_level = first.attrs.level ?? null;
+    heading = first.textContent || null;
+  }
+  return { heading, heading_level };
+}
+
+export function snapshotBlocks(editor: Editor): BlockInput[] {
+  if (!(editor.storage as any).markdown?.serializer) return [];
 
   const out: BlockInput[] = [];
   const stack: { level: number; id: string }[] = [];
@@ -109,15 +166,10 @@ export function snapshotBlocks(editor: Editor): BlockInput[] {
   editor.state.doc.forEach((node: any) => {
     if (node.type.name !== "mochiBlock" || !node.attrs.id) return;
     const id: string = node.attrs.id;
-    const content = contentById.get(id) ?? "";
 
-    let heading: string | null = null;
-    let heading_level: number | null = null;
-    const first = node.firstChild;
-    if (first && first.type.name === "heading") {
-      heading_level = first.attrs.level ?? null;
-      heading = first.textContent || null;
-    }
+    const content = markdownFromMochiBlock(editor, node);
+    if (content == null) return;
+    const { heading, heading_level } = headingFromMochiBlock(node);
 
     let parent_id: string | null = null;
     if (heading_level != null) {
@@ -137,21 +189,37 @@ export function snapshotBlocks(editor: Editor): BlockInput[] {
   return out;
 }
 
-function splitMarkdownByMarkers(md: string): Map<string, string> {
-  const map = new Map<string, string>();
-  const matches: { id: string; start: number; markerEnd: number }[] = [];
-  BLOCK_MARKER.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = BLOCK_MARKER.exec(md)) !== null) {
-    matches.push({ id: m[1], start: m.index, markerEnd: m.index + m[0].length });
-  }
-  for (let i = 0; i < matches.length; i++) {
-    const start = matches[i].markerEnd;
-    const end = i + 1 < matches.length ? matches[i + 1].start : md.length;
-    const raw = md.substring(start, end).replace(/\s+$/, "");
-    map.set(matches[i].id, unescapeInlineHashtags(raw));
-  }
-  return map;
+/**
+ * Snapshot one existing top-level mochiBlock. Used by the live canvas save
+ * path for ordinary typing, where parent nesting is unchanged and a full
+ * document walk would make large documents feel sticky.
+ */
+export function snapshotBlockById(
+  editor: Editor,
+  id: string,
+  parent_id: string | null,
+): BlockInput | null {
+  if (!(editor.storage as any).markdown?.serializer) return null;
+
+  let result: BlockInput | null = null;
+  let position = 0;
+  editor.state.doc.forEach((node: any) => {
+    if (result) return;
+    if (node.type.name !== "mochiBlock" || !node.attrs.id) {
+      position++;
+      return;
+    }
+    if (node.attrs.id !== id) {
+      position++;
+      return;
+    }
+
+    const content = markdownFromMochiBlock(editor, node);
+    if (content == null) return;
+    const { heading, heading_level } = headingFromMochiBlock(node);
+    result = { id, content, position, parent_id, heading, heading_level };
+  });
+  return result;
 }
 
 function escapeAttr(s: string): string {

@@ -1,8 +1,24 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
+import type { Decoration } from "@tiptap/pm/view";
 import { ulid } from "ulid";
 import { BlockView } from "../BlockView";
+
+/** Element-wise equality on PM decoration arrays — avoids spurious React
+ *  re-renders. Most blocks have an empty array, so this hits length === 0
+ *  and returns true in O(1). */
+function decorationsArrayEq(
+  a: readonly Decoration[],
+  b: readonly Decoration[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 const idMintKey = new PluginKey("mochiBlockIdMint");
 
@@ -83,7 +99,29 @@ export const Block = Node.create({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(BlockView);
+    // Custom `update` short-circuits the React re-render path for blocks
+    // whose underlying PM node and decorations didn't actually change.
+    // Without this, Tiptap calls `updateProps()` on every NodeView for
+    // every transaction (because PM regenerates the per-node decorations
+    // array each time), producing 2k React-root render attempts per
+    // keystroke on large docs.
+    return ReactNodeViewRenderer(BlockView, {
+      update: ({ oldNode, newNode, oldDecorations, newDecorations, updateProps }) => {
+        if (
+          oldNode === newNode &&
+          decorationsArrayEq(
+            oldDecorations as readonly Decoration[],
+            newDecorations as readonly Decoration[],
+          )
+        ) {
+          // Returning `true` here keeps the existing NodeView without
+          // touching React.
+          return true;
+        }
+        updateProps();
+        return true;
+      },
+    });
   },
 
   /**
@@ -114,16 +152,23 @@ export const Block = Node.create({
     return [
       // Mint a fresh ULID for any mochiBlock that's missing an id (e.g. one
       // created by Enter/split) or that has a duplicate id (e.g. from
-      // copy/paste). Runs once per transaction batch.
+      // copy/paste). Only runs the full scan when the top-level block count
+      // actually changed — plain text edits keep the count the same and skip
+      // the walk entirely. With 2k blocks this turns a per-keystroke 2k-node
+      // sweep into a no-op.
       new Plugin({
         key: idMintKey,
-        appendTransaction: (trs, _old, newState) => {
+        appendTransaction: (trs, oldState, newState) => {
           if (!trs.some((tr) => tr.docChanged)) return null;
+          if (oldState.doc.childCount === newState.doc.childCount) return null;
+
           const seen = new Set<string>();
           let tr = newState.tr;
           let modified = false;
-          newState.doc.descendants((node, pos) => {
-            if (node.type.name !== "mochiBlock") return true;
+          // Top-level only — `forEach` is cheaper than `descendants` here
+          // since mochiBlocks live directly under doc.
+          newState.doc.forEach((node, pos) => {
+            if (node.type.name !== "mochiBlock") return;
             const id: string | null = node.attrs.id;
             if (!id || seen.has(id)) {
               const fresh = ulid();
@@ -136,7 +181,6 @@ export const Block = Node.create({
             } else {
               seen.add(id);
             }
-            return false; // don't descend into the block's content
           });
           return modified ? tr : null;
         },
