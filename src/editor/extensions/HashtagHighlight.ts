@@ -9,12 +9,71 @@ const HASHTAG_RE = /(^|\s)(#[A-Za-z][A-Za-z0-9_\-/]*)/g;
  * Inline highlight for `#tag` patterns. Gives visual confirmation that a
  * hashtag is recognized — independent of whether the picker was used.
  *
- * Large-doc note: keeping a document-wide DecorationSet means every character
- * insert has to map every hashtag decoration after the cursor. On 2k+ block
- * canvases that is enough to make typing lag. Instead we decorate only the
- * active textblock; inactive blocks stay plain text until the cursor enters
- * them.
+ * Large-doc note: the naive implementation (rebuild the entire doc-wide
+ * DecorationSet on every transaction) made typing in 2k+ block canvases
+ * lag because every keystroke walked all 2k blocks and their text. We
+ * keep the doc-wide highlighting (so tags are visible everywhere, not
+ * just in the active block) but cache the *relative* offsets per block
+ * keyed on the PM Node reference. PM nodes are immutable, so an unedited
+ * block's offsets come from the cache in O(1); a single-block edit only
+ * re-walks that block. The overall doc walk is O(N) cache lookups —
+ * cheap enough that 2k blocks rebuild in well under a millisecond.
  */
+interface RelOffset {
+  from: number;
+  to: number;
+}
+
+const blockOffsets = new WeakMap<PMNode, RelOffset[]>();
+
+function offsetsForBlock(block: PMNode): RelOffset[] {
+  const cached = blockOffsets.get(block);
+  if (cached) return cached;
+  const out: RelOffset[] = [];
+  // `pos` is relative to the start of `block.content`; the doc-wide caller
+  // adds the block's content start position to make decorations absolute.
+  block.descendants((node, pos, parent) => {
+    if (!node.isText || !node.text) return;
+    if (
+      parent &&
+      (parent.type.name === "codeBlock" || parent.type.name === "code")
+    ) {
+      return;
+    }
+    if (node.marks.some((m) => m.type.name === "code")) return;
+    HASHTAG_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = HASHTAG_RE.exec(node.text)) !== null) {
+      const hashOffset = m.index + m[1].length;
+      const tagLen = m[2].length;
+      out.push({ from: pos + hashOffset, to: pos + hashOffset + tagLen });
+    }
+  });
+  blockOffsets.set(block, out);
+  return out;
+}
+
+function buildDocWide(doc: PMNode): DecorationSet {
+  const decos: Decoration[] = [];
+  doc.forEach((block, offset) => {
+    if (block.type.name !== "mochiBlock") return;
+    // +1 to skip the mochiBlock's opening token so positions land inside
+    // its content range.
+    const contentStart = offset + 1;
+    const offs = offsetsForBlock(block);
+    for (const o of offs) {
+      decos.push(
+        Decoration.inline(
+          contentStart + o.from,
+          contentStart + o.to,
+          { class: "mochi-tag" },
+        ),
+      );
+    }
+  });
+  return decos.length > 0 ? DecorationSet.create(doc, decos) : DecorationSet.empty;
+}
+
 export const HashtagHighlight = Extension.create({
   name: "hashtagHighlight",
 
@@ -24,9 +83,8 @@ export const HashtagHighlight = Extension.create({
       new Plugin<DecorationSet>({
         key,
         state: {
-          init: (_, state) => buildAtSelection(state.doc, state.selection),
-          apply: (_tr, _old, _oldState, newState) =>
-            buildAtSelection(newState.doc, newState.selection),
+          init: (_, state) => buildDocWide(state.doc),
+          apply: (tr, prev) => (tr.docChanged ? buildDocWide(tr.doc) : prev),
         },
         props: {
           decorations(state) {
@@ -37,51 +95,3 @@ export const HashtagHighlight = Extension.create({
     ];
   },
 });
-
-function buildAtSelection(doc: PMNode, selection: any): DecorationSet {
-  if (!selection.empty) return DecorationSet.empty;
-
-  const $from = selection.$from;
-  let from: number | null = null;
-  let to: number | null = null;
-  for (let depth = $from.depth; depth > 0; depth--) {
-    const node = $from.node(depth);
-    if (!node.type.isTextblock) continue;
-    if (node.type.name === "codeBlock") return DecorationSet.empty;
-    from = $from.start(depth);
-    to = $from.end(depth);
-    break;
-  }
-
-  if (from == null || to == null || from >= to) return DecorationSet.empty;
-
-  const decos: Decoration[] = [];
-  doc.nodesBetween(from, to, (node, pos, parent) => {
-    if (!node.isText || !node.text) return;
-    if (
-      parent &&
-      (parent.type.name === "codeBlock" || parent.type.name === "code")
-    ) {
-      return;
-    }
-    if (node.marks.some((m) => m.type.name === "code")) return;
-    pushTagDecorations(decos, pos, node.text);
-  });
-  return DecorationSet.create(doc, decos);
-}
-
-function pushTagDecorations(out: Decoration[], pos: number, text: string) {
-  HASHTAG_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = HASHTAG_RE.exec(text)) !== null) {
-    const hashOffset = m.index + m[1].length;
-    const tagLen = m[2].length;
-    out.push(
-      Decoration.inline(
-        pos + hashOffset,
-        pos + hashOffset + tagLen,
-        { class: "mochi-tag" },
-      ),
-    );
-  }
-}

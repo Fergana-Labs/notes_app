@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from "@tiptap/core";
+import { Node, cancelPositionCheck, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Decoration } from "@tiptap/pm/view";
@@ -105,7 +105,7 @@ export const Block = Node.create({
     // every transaction (because PM regenerates the per-node decorations
     // array each time), producing 2k React-root render attempts per
     // keystroke on large docs.
-    return ReactNodeViewRenderer(BlockView, {
+    const factory = ReactNodeViewRenderer(BlockView, {
       update: ({ oldNode, newNode, oldDecorations, newDecorations, updateProps }) => {
         if (
           oldNode === newNode &&
@@ -122,6 +122,43 @@ export const Block = Node.create({
         return true;
       },
     });
+    // Tiptap's ReactNodeView schedules a per-NodeView "position check"
+    // callback that runs on every editor `update` event. Each callback
+    // calls `renderer.updateProps({ getPos })` whenever its block's
+    // position changed — and `updateProps` rebuilds the editor's portal
+    // renderers map via `{ ...renderers, [id]: portal }`. With N=2k blocks
+    // and a keystroke that shifts ~N/2 of them, that becomes O(N²) per
+    // keystroke (≈4M ops) and is the main remaining source of typing lag.
+    //
+    // BlockView only reads `getPos` inside click handlers, never during
+    // render, so the prop refresh is wasted work. PM's underlying
+    // `getPos` closure resolves the live position at call time, so click
+    // handlers stay correct.
+    return (props: any) => {
+      const nodeView: any = factory(props);
+      const editor = props?.editor ?? nodeView?.editor;
+      const cb = nodeView?.positionCheckCallback;
+      if (cb && editor) {
+        cancelPositionCheck(editor, cb);
+        nodeView.positionCheckCallback = null;
+      }
+      // Same shape, second source: the constructor also wires up
+      // `editor.on("selectionUpdate", handleSelectionUpdate)` per NodeView,
+      // which schedules an rAF + runs `isNodeViewSelected` for each block on
+      // every cursor move (typing included). With 2k blocks that's 2k rAFs
+      // queued/canceled per character. BlockView ignores `props.selected`
+      // (we don't style `ProseMirror-selectednode`), so the selectNode /
+      // deselectNode flow is dead weight. Detach the listener — but keep
+      // the bound method on the instance so that destroy()'s subsequent
+      // `editor.off("selectionUpdate", this.handleSelectionUpdate)` is a
+      // safe no-op (the EventEmitter falls back to wiping ALL listeners
+      // when the second arg is falsy, which would be catastrophic).
+      const sel = nodeView?.handleSelectionUpdate;
+      if (editor && sel) {
+        editor.off("selectionUpdate", sel);
+      }
+      return nodeView;
+    };
   },
 
   /**

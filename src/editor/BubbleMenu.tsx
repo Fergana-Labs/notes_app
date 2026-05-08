@@ -17,6 +17,35 @@ interface Props {
   editor: Editor | null;
 }
 
+// Stable refs for `BubbleMenu`'s `options` and `shouldShow` props. Tiptap's
+// React `BubbleMenu` lists both in a useEffect deps array — if either has a
+// new identity per render, the effect re-fires and dispatches a PM
+// transaction (`type: "updateOptions"`) to the bubble-menu plugin. On a
+// 2k-block canvas, every transaction walks every NodeView, so a re-render
+// of CanvasEditor (which happens on every debounced save while typing)
+// turns into 2k extra NodeView updates per save tick. Hoisting these out
+// of the component body keeps their identity stable.
+const BUBBLE_OPTIONS = { placement: "top" as const, offset: 8 };
+
+const shouldShowBubble = ({
+  editor: e,
+  state,
+}: {
+  editor: Editor;
+  state: any;
+}): boolean => {
+  const { selection } = state;
+  if (selection.empty) return false;
+  // Hide while a suggestion popup is open (slash / hashtag).
+  for (const p of state.plugins) {
+    const s = p.getState?.(state);
+    if (s && typeof s === "object" && (s as any).active) return false;
+  }
+  // Hide inside code blocks (formatting buttons would no-op).
+  if (e.isActive("codeBlock")) return false;
+  return true;
+};
+
 export function BlockBubbleMenu({ editor }: Props) {
   const [showTurnInto, setShowTurnInto] = useState(false);
   const [showLinkInput, setShowLinkInput] = useState(false);
@@ -26,22 +55,8 @@ export function BlockBubbleMenu({ editor }: Props) {
   return (
     <BubbleMenu
       editor={editor}
-      options={{
-        placement: "top",
-        offset: 8,
-      }}
-      shouldShow={({ editor: e, state }) => {
-        const { selection } = state;
-        if (selection.empty) return false;
-        // Hide while a suggestion popup is open (slash / hashtag).
-        for (const p of state.plugins) {
-          const s = p.getState?.(state);
-          if (s && typeof s === "object" && (s as any).active) return false;
-        }
-        // Hide inside code blocks (formatting buttons would no-op).
-        if (e.isActive("codeBlock")) return false;
-        return true;
-      }}
+      options={BUBBLE_OPTIONS}
+      shouldShow={shouldShowBubble}
       className="z-30"
     >
       <div className="flex items-center gap-0.5 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg p-0.5">

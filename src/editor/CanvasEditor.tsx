@@ -22,6 +22,7 @@ import { CanvasLasso } from "./extensions/CanvasLasso";
 import { BlockDragHandle } from "./extensions/BlockDragHandle";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import { FastPlaceholder } from "./extensions/FastPlaceholder";
+import { PerfProfile } from "./extensions/PerfProfile";
 import { BlockBubbleMenu } from "./BubbleMenu";
 import { VersionHistoryModal } from "./VersionHistoryModal";
 import { setCanvasEditor } from "./editorRef";
@@ -147,6 +148,10 @@ export function CanvasEditor() {
       BlockDragHandle,
       ClipboardSerialize,
       KeyboardActions,
+      // Dev-only: logs slow transactions to the console with a breakdown
+      // of state.apply vs view.updateState. Inspect via `window.__mochiPerf`
+      // (call `__mochiPerf.summary()` for percentiles). See PerfProfile.ts.
+      ...(import.meta.env.DEV ? [PerfProfile] : []),
     ],
     content: "",
     onUpdate: ({ editor, transaction }: any) => {
@@ -258,16 +263,20 @@ export function CanvasEditor() {
   useEffect(() => {
     if (!editor) return;
     if (blocks.length === 0 && !initializedRef.current) return;
-    const orderSig = blocks.map((b) => `${b.id}:${b.content_hash}`).join("|");
-    if (initializedRef.current && orderSig === lastBlockOrderRef.current) return;
 
-    // Don't clobber an in-flight edit. This is also the common path after our
-    // own debounced canvas save updates the workspace store; avoid a full
-    // editor snapshot while the user is actively typing.
+    // Hot path during typing: every save (~3/sec) updates `blocks` in the
+    // store, which re-runs this effect. Skip the O(N) `orderSig` build —
+    // a 2k-block doc spends 2-5ms here per save tick that's pure waste
+    // because we'd just take the focused early-return below anyway.
+    // Mark the cache stale so the next unfocused tick recomputes from
+    // scratch (one-time cost on blur).
     if (initializedRef.current && editor.isFocused) {
-      lastBlockOrderRef.current = orderSig;
+      lastBlockOrderRef.current = "";
       return;
     }
+
+    const orderSig = blocks.map((b) => `${b.id}:${b.content_hash}`).join("|");
+    if (initializedRef.current && orderSig === lastBlockOrderRef.current) return;
 
     if (initializedRef.current) {
       // If the editor's current doc already matches (e.g. the change came
