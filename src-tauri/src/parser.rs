@@ -1,0 +1,223 @@
+//! Block-level helpers used by the SQLite-first storage layer:
+//!
+//! - [`hash`] — content hash used for change detection and version dedupe.
+//! - [`extract_hashtags`] — pull `#tag` matches out of a block's markdown
+//!   content (skips fenced code, ignores tags that look like URLs).
+//!
+//! The legacy whole-canvas parser (block markers, fence pairs, heading-stack
+//! parent_id assignment) lives in [`migration`] — it's only used during the
+//! one-shot import from `canvas.md` into the database.
+
+use once_cell::sync::Lazy;
+use regex::Regex;
+use sha2::{Digest, Sha256};
+
+static TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|\s)#([A-Za-z][A-Za-z0-9_\-/]*)").unwrap());
+static URL: Lazy<Regex> = Lazy::new(|| Regex::new(r"https?://\S+").unwrap());
+
+pub fn hash(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    hex::encode(h.finalize())
+}
+
+pub fn extract_hashtags(content: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut in_code = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        let stripped = URL.replace_all(line, "");
+        for cap in TAG.captures_iter(&stripped) {
+            let t = cap[1].to_lowercase();
+            if !tags.contains(&t) {
+                tags.push(t);
+            }
+        }
+    }
+    tags
+}
+
+pub mod migration {
+    //! Legacy `canvas.md` parser. Only used by the one-shot import that
+    //! runs when a workspace is opened with `schema_version < 2`.
+
+    use super::{extract_hashtags, hash};
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    use serde::{Deserialize, Serialize};
+    use ulid::Ulid;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ParsedBlock {
+        pub id: String,
+        pub parent_id: Option<String>,
+        pub position: i64,
+        pub heading: Option<String>,
+        pub heading_level: Option<u8>,
+        pub content: String,
+        pub content_hash: String,
+        pub tags: Vec<String>,
+    }
+
+    static ID_COMMENT: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^<!--\s*block:([0-9A-HJKMNP-TV-Z]{26})\s*-->\s*$").unwrap());
+    static FENCE_START: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^<!--\s*block:start(?:\s+id=([0-9A-HJKMNP-TV-Z]{26}))?\s*-->\s*$").unwrap()
+    });
+    static FENCE_END: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^<!--\s*block:end\s*-->\s*$").unwrap());
+    static HEADING: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(#{1,6})\s+(.+?)\s*$").unwrap());
+
+    pub fn parse(input: &str) -> Vec<ParsedBlock> {
+        let lines: Vec<&str> = input.lines().collect();
+        let mut raw_blocks: Vec<(Option<String>, String)> = Vec::new();
+        let mut i = 0;
+
+        fn trim_trailing_blank(buf: &mut Vec<&str>) {
+            while buf.last().map_or(false, |l| l.trim().is_empty()) {
+                buf.pop();
+            }
+        }
+
+        while i < lines.len() {
+            while i < lines.len() && lines[i].trim().is_empty() {
+                i += 1;
+            }
+            if i >= lines.len() {
+                break;
+            }
+
+            if let Some(caps) = FENCE_START.captures(lines[i]) {
+                let id = caps.get(1).map(|m| m.as_str().to_string());
+                i += 1;
+                let mut buf: Vec<&str> = Vec::new();
+                while i < lines.len() && !FENCE_END.is_match(lines[i]) {
+                    buf.push(lines[i]);
+                    i += 1;
+                }
+                if i < lines.len() {
+                    i += 1;
+                }
+                trim_trailing_blank(&mut buf);
+                raw_blocks.push((id, buf.join("\n")));
+                continue;
+            }
+
+            if let Some(caps) = ID_COMMENT.captures(lines[i]) {
+                let id = caps[1].to_string();
+                i += 1;
+                let mut buf: Vec<&str> = Vec::new();
+                while i < lines.len()
+                    && !ID_COMMENT.is_match(lines[i])
+                    && !FENCE_START.is_match(lines[i])
+                {
+                    buf.push(lines[i]);
+                    i += 1;
+                }
+                trim_trailing_blank(&mut buf);
+                raw_blocks.push((Some(id), buf.join("\n")));
+                continue;
+            }
+
+            let mut buf: Vec<&str> = Vec::new();
+            while i < lines.len()
+                && !lines[i].trim().is_empty()
+                && !ID_COMMENT.is_match(lines[i])
+                && !FENCE_START.is_match(lines[i])
+            {
+                buf.push(lines[i]);
+                i += 1;
+            }
+            if !buf.is_empty() {
+                raw_blocks.push((None, buf.join("\n")));
+            }
+        }
+
+        let mut out: Vec<ParsedBlock> = Vec::with_capacity(raw_blocks.len());
+        let mut stack: Vec<(u8, String)> = Vec::new();
+
+        for (pos, (maybe_id, content)) in raw_blocks.into_iter().enumerate() {
+            let id = maybe_id.unwrap_or_else(|| Ulid::new().to_string());
+
+            let first_line = content.lines().next().unwrap_or("");
+            let (heading, heading_level) = if let Some(caps) = HEADING.captures(first_line) {
+                let lvl = caps[1].len() as u8;
+                (Some(caps[2].to_string()), Some(lvl))
+            } else {
+                (None, None)
+            };
+
+            let parent_id = match heading_level {
+                Some(lvl) => {
+                    while stack.last().map_or(false, |(l, _)| *l >= lvl) {
+                        stack.pop();
+                    }
+                    let p = stack.last().map(|(_, id)| id.clone());
+                    stack.push((lvl, id.clone()));
+                    p
+                }
+                None => stack.last().map(|(_, id)| id.clone()),
+            };
+
+            let tags = extract_hashtags(&content);
+            let content_hash = hash(&content);
+
+            out.push(ParsedBlock {
+                id,
+                parent_id,
+                position: pos as i64,
+                heading,
+                heading_level,
+                content,
+                content_hash,
+                tags,
+            });
+        }
+
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_inline_tags() {
+        let tags = extract_hashtags("a #foo and #bar/baz here");
+        assert!(tags.contains(&"foo".to_string()));
+        assert!(tags.contains(&"bar/baz".to_string()));
+    }
+
+    #[test]
+    fn skips_tags_inside_fenced_code() {
+        let md = "before #yes\n```\n#no\n```\nafter #also";
+        let tags = extract_hashtags(md);
+        assert!(tags.contains(&"yes".to_string()));
+        assert!(tags.contains(&"also".to_string()));
+        assert!(!tags.contains(&"no".to_string()));
+    }
+
+    #[test]
+    fn ignores_tags_in_urls() {
+        let tags = extract_hashtags("https://example.com/#frag and #real");
+        assert!(tags.contains(&"real".to_string()));
+        assert!(!tags.iter().any(|t| t == "frag"));
+    }
+
+    #[test]
+    fn migration_parse_round_trip_keeps_ids() {
+        let md = "<!-- block:01J0000000000000000000ABCD -->\nhello\n";
+        let blocks = migration::parse(md);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].id, "01J0000000000000000000ABCD");
+        assert_eq!(blocks[0].content, "hello");
+    }
+}
