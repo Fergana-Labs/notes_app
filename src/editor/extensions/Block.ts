@@ -1,9 +1,50 @@
 import { Node, cancelPositionCheck, mergeAttributes } from "@tiptap/core";
-import { ReactNodeViewRenderer } from "@tiptap/react";
+import { ReactNodeView, ReactNodeViewRenderer } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Decoration } from "@tiptap/pm/view";
 import { ulid } from "ulid";
 import { BlockView } from "../BlockView";
+
+// One-time monkey-patch of `ReactNodeView.prototype.mount` to neutralise
+// the per-NodeView `schedulePositionCheck` registration.
+//
+// Why this can't live in the addNodeView wrapper:
+//   `ReactNodeView`'s constructor sets `this.positionCheckCallback = null`
+//   as a class-field initialiser. In ES class semantics, class fields run
+//   AFTER `super()` returns. The `NodeView` base constructor calls
+//   `this.mount()` (the overridden ReactNodeView.mount), which assigns
+//   `this.positionCheckCallback = () => {...}` and registers it with the
+//   per-editor registry. When super() returns, the `= null` field
+//   initialiser fires and clobbers the reference back to null — even
+//   though the registry still holds the function. By the time our
+//   addNodeView wrapper runs, `nodeView.positionCheckCallback` is null
+//   and the cancel-by-reference path is a silent no-op, leaving 2k
+//   callbacks alive in the registry. The rAF that fires those callbacks
+//   then calls `getPos()` (an O(N) sibling-array scan) on every block
+//   for every editor `update`, ≈ O(N²) per keystroke and ≈ 535ms per
+//   frame on a 2k-block doc — exactly what the WebKit Inspector
+//   timeline showed. Cancelling inside `mount` runs *before* the field
+//   initialiser, so the registry actually empties out.
+//
+// Done as a side-effect at module load (idempotent — guarded against
+// re-application during HMR).
+const RNV_MOUNT_PATCHED = Symbol.for("mochi.rnvMountPatched");
+const proto = ReactNodeView.prototype as any;
+if (!proto[RNV_MOUNT_PATCHED]) {
+  const origMount = proto.mount;
+  proto.mount = function patchedMount(this: any) {
+    origMount.call(this);
+    const cb = this.positionCheckCallback;
+    if (cb && this.editor) {
+      cancelPositionCheck(this.editor, cb);
+      // Setting to null here is fine — the constructor's class field
+      // is going to overwrite this anyway. We just unhook from the
+      // registry before any update event has a chance to fire it.
+      this.positionCheckCallback = null;
+    }
+  };
+  proto[RNV_MOUNT_PATCHED] = true;
+}
 
 /** Element-wise equality on PM decoration arrays — avoids spurious React
  *  re-renders. Most blocks have an empty array, so this hits length === 0
@@ -118,6 +159,29 @@ export const Block = Node.create({
           // touching React.
           return true;
         }
+        // Typing inside a block produces a new mochiBlock node ref (PM
+        // nodes are immutable), but the React `BlockView` component only
+        // depends on:
+        //   - node.attrs (id, tags, manualTags)
+        //   - first-child type/level (gutter-padding choice for headings)
+        //   - decorations (the outer-decoration array)
+        // The actual editable text is rendered into `contentDOM` directly
+        // by PM, *not* through React. So when only the inner text changed,
+        // calling `updateProps` is pure waste — and it's the dominant
+        // remaining keystroke cost on a 2k-block doc, because Tiptap's
+        // ReactRenderer.setRenderer notifies a portal subscriber that
+        // re-reconciles all N portal entries on every change.
+        // PM's `Node.copy` preserves `attrs` and `marks` references when
+        // only content changes, so reference equality is sufficient.
+        const oldFirst = oldNode.firstChild;
+        const newFirst = newNode.firstChild;
+        if (
+          oldNode.attrs === newNode.attrs &&
+          oldFirst?.type === newFirst?.type &&
+          (oldFirst?.attrs.level ?? null) === (newFirst?.attrs.level ?? null)
+        ) {
+          return true;
+        }
         updateProps();
         return true;
       },
@@ -136,6 +200,13 @@ export const Block = Node.create({
     // handlers stay correct.
     return (props: any) => {
       const nodeView: any = factory(props);
+      // The prototype-`mount` patch above already cancelled the
+      // schedulePositionCheck registration before the class-field
+      // initialiser clobbered `nodeView.positionCheckCallback`. This
+      // remains as a safety net in case the patch hasn't applied yet
+      // (e.g. during HMR before the module re-evaluated) — at that
+      // point the cb-by-reference path is `null` anyway, so the call
+      // is a no-op.
       const editor = props?.editor ?? nodeView?.editor;
       const cb = nodeView?.positionCheckCallback;
       if (cb && editor) {

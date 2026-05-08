@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -15,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useWorkspace } from "../stores/workspace";
 import { descendantIds } from "../lib/markdown";
 import type { StoredBlock } from "../lib/ipc";
@@ -35,13 +35,23 @@ function directNonHeadingChildren(
 }
 
 export function SectionsPane({ onJump }: { onJump: (id: string) => void }) {
-  const blocks = useWorkspace((s) => s.blocks);
-
-  // Flat list of all headings (any level), in their canvas order.
-  const headings = useMemo(
-    () => blocks.filter((b) => b.heading_level != null),
-    [blocks],
+  // Subscribe to *only* the heading rows from `blocks`, with a shallow
+  // equality check on the array. PM nodes are immutable and saveSnapshot
+  // preserves StoredBlock references for unchanged blocks, so when the
+  // user types in a non-heading block this filter returns the same set
+  // of element references and `useShallow` skips the re-render entirely.
+  // Without this, every save (~3/sec while typing) re-rendered the
+  // entire SortableContext + 100s of `useSortable` hooks — multi-hundred-
+  // millisecond cost that masqueraded as paint delay in the keystroke
+  // profiler.
+  const headings = useWorkspace(
+    useShallow((s) => s.blocks.filter((b) => b.heading_level != null)),
   );
+  // `handleDragEnd` needs the full block list for descendant lookup, but
+  // that path is only taken on drop. Read via `getState()` inside the
+  // handler so this component doesn't re-render when non-heading content
+  // changes (the whole point of the `useShallow` heading subscription).
+  const getBlocks = () => useWorkspace.getState().blocks;
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -62,6 +72,8 @@ export function SectionsPane({ onJump }: { onJump: (id: string) => void }) {
 
     const editor = getCanvasEditor();
     if (!editor) return;
+
+    const blocks = getBlocks();
 
     // The dragged heading carries its entire transitive subtree
     // (sub-headings + everything beneath them). Other headings just take

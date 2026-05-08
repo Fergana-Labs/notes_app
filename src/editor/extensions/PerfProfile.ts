@@ -2,36 +2,71 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 
 /**
- * Dev-only typing profiler. Wraps the editor view's `dispatch` so every
- * transaction is timed end-to-end — but, critically, the wrapper still
- * calls the original `dispatch`, so Tiptap's `_props.dispatchTransaction`
- * (which is what emits the `transaction` / `update` / `selectionUpdate`
- * events that fire our `onUpdate` save callback and the bubble-menu
- * position update) runs untouched. An earlier version of this profiler
- * called `state.apply` + `view.updateState` directly and bypassed all of
- * that — making dev appear artificially fast because save work, bubble
- * menu updates, etc. were silently being skipped.
+ * Dev-only typing profiler. Measures the *full* keystroke pipeline, not
+ * just PM's dispatch — the v1 of this profiler stopped at Tiptap's
+ * `transaction` event, which fires *inside* `editor.dispatchTransaction`
+ * before the `update` event (our save callback), the bubble-menu update,
+ * any post-tx microtasks, and the next paint. That under-counted real
+ * cost and hid bunching (input queueing while the main thread is busy).
  *
- * Breakdown: Tiptap emits `beforeTransaction` after `state.applyTransaction`
- * but before `view.updateState`, and emits `transaction` after the view
- * update finishes. We straddle those two events to split the total into
- * `apply` (state.applyTransaction) vs `viewUpdate` (DOM reconcile +
- * NodeView walks).
+ * What we measure now per keystroke (one `[perf]` line each):
+ *  - apply       — state.applyTransaction (boundary: t0 → beforeTransaction)
+ *  - viewUpdate  — view.updateState (boundary: beforeTransaction → transaction)
+ *  - postTx      — emit('update' / focus / etc.) after `transaction` (boundary: transaction → origDispatch return)
+ *  - dispatch    — full origDispatch wall-clock (apply + viewUpdate + postTx)
+ *  - micro       — work that ran in microtasks queued by the dispatch
+ *                  (boundary: origDispatch return → next rAF callback)
+ *  - paint       — full t0 → next rAF (the paint *after* this keystroke)
  *
- * Output:
- *  - `console.warn` on any transaction slower than `slowMs` (default 8)
- *  - rolling stats on `window.__mochiPerf`: `{ txTimes, slowest, recent }`
- *  - matching `performance.mark()` entries you can record in the WebKit
- *    Inspector → Timelines panel for a real flamegraph.
+ * Plus passive observers for input latency and long tasks:
+ *  - PerformanceObserver `event` / `first-input` — input → paint latency,
+ *    independent of our dispatch instrumentation. Catches *queueing*
+ *    (bunching) since `processingStart - startTime` is the queue delay.
+ *  - PerformanceObserver `longtask` — any task ≥50ms blocking the main
+ *    thread, which is what bunches keystrokes.
  *
- * To open the inspector in a Tauri dev build: right-click the window →
- * "Inspect Element" (the WKWebView gives you a regular Web Inspector with a
- * Timelines tab; record while typing 5–10 chars and stop).
+ * Inspect at runtime via `window.__mochiPerf`:
+ *   __mochiPerf.summary()       // tx percentiles
+ *   __mochiPerf.recent          // last 100 tx entries with full breakdown
+ *   __mochiPerf.input           // last 100 input-timing entries
+ *   __mochiPerf.longtasks       // last 50 long tasks
+ *   __mochiPerf.slowMs = 4      // lower the warn threshold
+ *   __mochiPerf.reset()
  */
+interface TxEntry {
+  n: number;
+  total: number;
+  apply: number;
+  viewUpdate: number;
+  postTx: number;
+  dispatch: number;
+  micro: number;
+  paint: number;
+  docChanged: boolean;
+  childCount: number;
+  ts: number;
+}
+
+interface InputEntry {
+  type: string;
+  duration: number;
+  queue: number;
+  processing: number;
+  ts: number;
+}
+
+interface LongTaskEntry {
+  duration: number;
+  attribution: string;
+  ts: number;
+}
+
 interface PerfStats {
   txTimes: number[];
-  recent: { n: number; total: number; apply: number; viewUpdate: number; docChanged: boolean; childCount: number; ts: number }[];
-  slowest: { n: number; total: number; apply: number; viewUpdate: number; ts: number } | null;
+  recent: TxEntry[];
+  slowest: TxEntry | null;
+  input: InputEntry[];
+  longtasks: LongTaskEntry[];
   enabled: boolean;
   slowMs: number;
   reset(): void;
@@ -44,7 +79,15 @@ declare global {
   }
 }
 
-const RING_SIZE = 100;
+const RING_TX = 100;
+const RING_INPUT = 100;
+const RING_LT = 50;
+
+function pct(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
 
 function ensureStats(): PerfStats {
   if (typeof window === "undefined") {
@@ -52,6 +95,8 @@ function ensureStats(): PerfStats {
       txTimes: [],
       recent: [],
       slowest: null,
+      input: [],
+      longtasks: [],
       enabled: false,
       slowMs: 8,
       reset() {},
@@ -63,36 +108,116 @@ function ensureStats(): PerfStats {
     txTimes: [],
     recent: [],
     slowest: null,
+    input: [],
+    longtasks: [],
     enabled: true,
     slowMs: 8,
     reset() {
       this.txTimes = [];
       this.recent = [];
       this.slowest = null;
+      this.input = [];
+      this.longtasks = [];
     },
     summary() {
       if (this.txTimes.length === 0) {
         console.log("[perf] no transactions recorded yet");
         return;
       }
-      const sorted = [...this.txTimes].sort((a, b) => a - b);
-      const sum = sorted.reduce((s, n) => s + n, 0);
-      const avg = sum / sorted.length;
-      const p50 = sorted[Math.floor(sorted.length * 0.5)];
-      const p90 = sorted[Math.floor(sorted.length * 0.9)];
-      const p99 = sorted[Math.floor(sorted.length * 0.99)];
-      const max = sorted[sorted.length - 1];
+      const totals = this.txTimes;
+      const dispatches = this.recent.map((r) => r.dispatch);
+      const paints = this.recent.map((r) => r.paint);
       console.log(
-        `[perf] last ${sorted.length} tx: avg ${avg.toFixed(1)}ms · p50 ${p50.toFixed(1)} · p90 ${p90.toFixed(1)} · p99 ${p99.toFixed(1)} · max ${max.toFixed(1)}`,
+        `[perf] tx (${totals.length}): total p50 ${pct(totals, 0.5).toFixed(1)} · p90 ${pct(totals, 0.9).toFixed(1)} · p99 ${pct(totals, 0.99).toFixed(1)} · max ${pct(totals, 1).toFixed(1)}`,
       );
-      if (this.slowest) {
+      console.log(
+        `[perf] dispatch p50 ${pct(dispatches, 0.5).toFixed(1)} · p90 ${pct(dispatches, 0.9).toFixed(1)} · max ${pct(dispatches, 1).toFixed(1)} ms (apply+view+postTx wall clock)`,
+      );
+      console.log(
+        `[perf] paint    p50 ${pct(paints, 0.5).toFixed(1)} · p90 ${pct(paints, 0.9).toFixed(1)} · max ${pct(paints, 1).toFixed(1)} ms (input → next rAF)`,
+      );
+      if (this.input.length > 0) {
+        const queues = this.input.map((i) => i.queue);
+        const procs = this.input.map((i) => i.processing);
         console.log(
-          `[perf] slowest tx#${this.slowest.n}: total ${this.slowest.total.toFixed(1)}ms (apply ${this.slowest.apply.toFixed(1)}, viewUpdate ${this.slowest.viewUpdate.toFixed(1)})`,
+          `[perf] input (${this.input.length}): queue p50 ${pct(queues, 0.5).toFixed(1)} · p90 ${pct(queues, 0.9).toFixed(1)} · max ${pct(queues, 1).toFixed(1)} ms (PerformanceEventTiming)`,
+        );
+        console.log(
+          `[perf] input proc p50 ${pct(procs, 0.5).toFixed(1)} · p90 ${pct(procs, 0.9).toFixed(1)} · max ${pct(procs, 1).toFixed(1)} ms`,
+        );
+      }
+      if (this.longtasks.length > 0) {
+        const lts = this.longtasks.map((l) => l.duration);
+        console.log(
+          `[perf] longtasks (${this.longtasks.length}): p50 ${pct(lts, 0.5).toFixed(1)} · p90 ${pct(lts, 0.9).toFixed(1)} · max ${pct(lts, 1).toFixed(1)} ms`,
+        );
+      }
+      if (this.slowest) {
+        const s = this.slowest;
+        console.log(
+          `[perf] slowest tx#${s.n}: total ${s.total.toFixed(1)} · apply ${s.apply.toFixed(1)} · view ${s.viewUpdate.toFixed(1)} · postTx ${s.postTx.toFixed(1)} · micro ${s.micro.toFixed(1)} · paint ${s.paint.toFixed(1)}`,
         );
       }
     },
   };
   window.__mochiPerf = stats;
+
+  // Passive observers — set up once per page. They fire independently of
+  // PM/Tiptap and catch work that happens *outside* the dispatch window.
+  try {
+    const inputObs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as any[]) {
+        // PerformanceEventTiming.processingStart - startTime is the time
+        // the input event spent queued before we ran our handler. Big
+        // queue numbers = bunching.
+        const queue = entry.processingStart != null ? entry.processingStart - entry.startTime : 0;
+        const processing = entry.processingEnd != null && entry.processingStart != null
+          ? entry.processingEnd - entry.processingStart
+          : 0;
+        stats.input.push({
+          type: entry.name,
+          duration: entry.duration,
+          queue,
+          processing,
+          ts: entry.startTime,
+        });
+        if (stats.input.length > RING_INPUT) stats.input.shift();
+        if (entry.duration >= stats.slowMs * 2) {
+          console.warn(
+            `[perf-input] ${entry.name} ${entry.duration.toFixed(1)}ms · queue ${queue.toFixed(1)} · proc ${processing.toFixed(1)}`,
+          );
+        }
+      }
+    });
+    // durationThreshold of 0 captures every input — Chromium defaults to
+    // 104ms which would hide everything we care about. Some implementations
+    // ignore the option, that's fine.
+    (inputObs as any).observe({ type: "event", buffered: true, durationThreshold: 0 });
+    (inputObs as any).observe({ type: "first-input", buffered: true });
+  } catch {
+    /* Event Timing not supported in this WebKit, ignore */
+  }
+
+  try {
+    const ltObs = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const attr = (entry as any).attribution?.[0]?.containerType ?? "main";
+        stats.longtasks.push({
+          duration: entry.duration,
+          attribution: attr,
+          ts: entry.startTime,
+        });
+        if (stats.longtasks.length > RING_LT) stats.longtasks.shift();
+        console.warn(
+          `[perf-longtask] ${entry.duration.toFixed(0)}ms task at ${entry.startTime.toFixed(0)}ms · ${attr}`,
+        );
+      }
+    });
+    ltObs.observe({ entryTypes: ["longtask"] });
+  } catch {
+    /* longtask not supported in WebKit, that's expected */
+  }
+
   return stats;
 }
 
@@ -105,75 +230,27 @@ export const PerfProfile = Extension.create({
     const stats = ensureStats();
     const editor = this.editor;
     let txN = 0;
-    // Pending state for the in-flight transaction. Set when our dispatch
-    // wrapper enters; consumed by the `transaction` event listener.
-    let pending: { n: number; t0: number; tApplyEnd: number | null } | null = null;
+    // Pending state for the in-flight transaction.
+    interface Pending {
+      n: number;
+      t0: number;
+      tApplyEnd: number | null;
+      tViewEnd: number | null;
+    }
+    let pending: Pending | null = null;
 
-    // Tiptap fires `beforeTransaction` after state.applyTransaction but
-    // before view.updateState. We use it to mark the boundary between
-    // the "apply" and "viewUpdate" slices.
     editor.on("beforeTransaction", () => {
       if (pending) pending.tApplyEnd = performance.now();
     });
 
-    // `transaction` fires after view.updateState completes. We close out
-    // the pending entry here (rather than after origDispatch returns)
-    // because some Tiptap dispatches (e.g. `editor.view.dispatch` from
-    // PM input handlers) re-enter through the wrapped dispatch — but the
-    // event is the canonical "transaction finished" signal.
-    editor.on("transaction", ({ transaction }) => {
-      if (!pending) return;
-      const t1 = performance.now();
-      const total = t1 - pending.t0;
-      const apply = pending.tApplyEnd != null ? pending.tApplyEnd - pending.t0 : 0;
-      const viewUpdate = pending.tApplyEnd != null ? t1 - pending.tApplyEnd : total;
-      const n = pending.n;
-      pending = null;
-
-      performance.mark(`mochi:tx${n}:end`);
-      try {
-        performance.measure(`mochi:tx${n}`, `mochi:tx${n}:start`, `mochi:tx${n}:end`);
-      } catch {
-        /* mark race */
-      }
-
-      stats.txTimes.push(total);
-      if (stats.txTimes.length > RING_SIZE) stats.txTimes.shift();
-
-      const childCount = editor.state.doc.childCount;
-      stats.recent.push({
-        n,
-        total,
-        apply,
-        viewUpdate,
-        docChanged: transaction.docChanged,
-        childCount,
-        ts: pending ? (pending as any).t0 : t1,
-      });
-      if (stats.recent.length > RING_SIZE) stats.recent.shift();
-
-      if (!stats.slowest || total > stats.slowest.total) {
-        stats.slowest = { n, total, apply, viewUpdate, ts: t1 };
-      }
-
-      if (total >= stats.slowMs) {
-        console.warn(
-          `[perf] tx#${n} ${total.toFixed(1)}ms · apply ${apply.toFixed(1)} · viewUpdate ${viewUpdate.toFixed(1)} · childCount ${childCount} · docChanged ${transaction.docChanged}`,
-        );
-      }
+    editor.on("transaction", () => {
+      if (pending) pending.tViewEnd = performance.now();
     });
 
     return [
       new Plugin({
         key: perfKey,
         view(view) {
-          // Wrap `view.dispatch` so we can stamp t0 *before* state.apply
-          // runs. CRITICAL: we delegate to the original `view.dispatch`
-          // (which routes through Tiptap's `_props.dispatchTransaction`),
-          // so all Tiptap event firing — `update`, `transaction`,
-          // `selectionUpdate`, the focus/blur path — runs untouched.
-          // Bypassing it would silently break onUpdate callbacks and is
-          // exactly the bug the previous version of this profiler had.
           const origDispatch = view.dispatch.bind(view);
           (view as any).dispatch = (tr: any) => {
             if (!stats.enabled) {
@@ -182,13 +259,83 @@ export const PerfProfile = Extension.create({
             }
             const n = ++txN;
             const t0 = performance.now();
-            pending = { n, t0, tApplyEnd: null };
+            // Capture our slot in a local — `pending` is the shared write
+            // target the editor.on handlers update, but it can be reassigned
+            // (or nulled) by re-entrant dispatches. We restore the previous
+            // outer pending in `finally` and read our timestamps off `local`,
+            // so we're robust to nested calls and to errors in origDispatch.
+            const local: Pending = { n, t0, tApplyEnd: null, tViewEnd: null };
+            const prevPending = pending;
+            pending = local;
             performance.mark(`mochi:tx${n}:start`);
-            origDispatch(tr);
-            // If `transaction` event didn't fire (e.g. tr suppressed by
-            // captureTransaction), drop the pending entry so the next tx
-            // starts clean.
-            if (pending && pending.n === n) pending = null;
+            try {
+              origDispatch(tr);
+            } finally {
+              pending = prevPending;
+            }
+            const tDispatchEnd = performance.now();
+            const tApplyEnd = local.tApplyEnd ?? tDispatchEnd;
+            const tViewEnd = local.tViewEnd ?? tDispatchEnd;
+            const docChanged = tr.docChanged;
+            const childCount = view.state.doc.childCount;
+
+            performance.mark(`mochi:tx${n}:dispatchEnd`);
+
+            // Schedule a rAF to capture paint + microtask cost. The rAF
+            // fires after the browser commits this frame.
+            const captureN = n;
+            const tCaptureT0 = t0;
+            const tCaptureViewEnd = tViewEnd;
+            const tCaptureDispatchEnd = tDispatchEnd;
+            requestAnimationFrame(() => {
+              const tPaint = performance.now();
+              const total = tPaint - tCaptureT0;
+              const apply = tApplyEnd - tCaptureT0;
+              const viewUpdate = tCaptureViewEnd - tApplyEnd;
+              const postTx = tCaptureDispatchEnd - tCaptureViewEnd;
+              const dispatch = tCaptureDispatchEnd - tCaptureT0;
+              const micro = tPaint - tCaptureDispatchEnd;
+              const paint = total;
+
+              performance.mark(`mochi:tx${captureN}:paint`);
+              try {
+                performance.measure(
+                  `mochi:tx${captureN}`,
+                  `mochi:tx${captureN}:start`,
+                  `mochi:tx${captureN}:paint`,
+                );
+              } catch {
+                /* mark race */
+              }
+
+              const entry: TxEntry = {
+                n: captureN,
+                total,
+                apply,
+                viewUpdate,
+                postTx,
+                dispatch,
+                micro,
+                paint,
+                docChanged,
+                childCount,
+                ts: tCaptureT0,
+              };
+
+              stats.txTimes.push(total);
+              if (stats.txTimes.length > RING_TX) stats.txTimes.shift();
+              stats.recent.push(entry);
+              if (stats.recent.length > RING_TX) stats.recent.shift();
+              if (!stats.slowest || total > stats.slowest.total) {
+                stats.slowest = entry;
+              }
+
+              if (total >= stats.slowMs) {
+                console.warn(
+                  `[perf] tx#${captureN} ${total.toFixed(1)}ms · apply ${apply.toFixed(1)} · view ${viewUpdate.toFixed(1)} · postTx ${postTx.toFixed(1)} · micro ${micro.toFixed(1)} · cc ${childCount} · doc ${docChanged}`,
+                );
+              }
+            });
           };
           return {};
         },
