@@ -124,11 +124,30 @@ rustup target add x86_64-apple-darwin aarch64-apple-darwin
 pnpm tauri build --target universal-apple-darwin
 ```
 
-For a signed + notarized DMG you'll need an Apple Developer ID:
+### Signed + notarized DMG (for public distribution)
 
-1. Set `bundle.macOS.signingIdentity` and `providerShortName` in `src-tauri/tauri.conf.json`.
-2. Export `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), and `APPLE_TEAM_ID` before running `pnpm tauri build`. Tauri runs `notarytool` automatically.
+You need an Apple Developer Program membership ($99/year) and a **Developer ID Application** certificate installed in Keychain.
+
+1. **Copy the env template and fill it in:**
+   ```bash
+   cp .env.example .env.local
+   ```
+   Edit `.env.local` and set:
+   - `APPLE_SIGNING_IDENTITY` — exact certificate name from Keychain (find with `security find-identity -p codesigning -v`)
+   - `APPLE_ID` — your Apple ID email
+   - `APPLE_PASSWORD` — an [app-specific password](https://appleid.apple.com), **not** your real Apple ID password
+   - `APPLE_TEAM_ID` — your 10-character Team ID from [developer.apple.com → Membership](https://developer.apple.com/account)
+
+   `.env.local` is gitignored so it never lands in commits.
+
+2. **Run the release script:**
+   ```bash
+   ./scripts/release-mac.sh                     # current arch only
+   ./scripts/release-mac.sh --universal         # Intel + Apple Silicon
+   ```
+
+   The script sources `.env.local`, runs `pnpm tauri build`, and Tauri picks up the env vars automatically — `codesign` runs first, then `xcrun notarytool`, then `xcrun stapler`. Resulting DMG installs cleanly on any Mac.
 
 ## License
 
-MIT (or whatever you prefer — pick one before public release).
+[MIT](LICENSE) © 2026 Samuel Liu.
