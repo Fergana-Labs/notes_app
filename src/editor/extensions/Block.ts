@@ -157,6 +157,50 @@ export const Block = Node.create({
       if (editor && sel) {
         editor.off("selectionUpdate", sel);
       }
+      // Replace `update` to skip the per-tick `this.currentPos = this.getPos()`
+      // call inside Tiptap's React NodeView base. PM's `getPos` for a
+      // top-level node is O(N) — `posBeforeChild` walks the parent's children
+      // array linearly to find self. With 2k NodeViews × 2k-sibling walk per
+      // call, that's ~2M iterations of pointer-comparison per keystroke, and
+      // it's the dominant remaining cost in `viewUpdate` after the listeners
+      // above were detached. We never read `currentPos` (the only consumer
+      // was the selectionUpdate listener that we just removed), so we
+      // replicate the rest of Tiptap's update wrapper without that line.
+      const customUpdate = nodeView.options?.update;
+      if (typeof customUpdate === "function") {
+        nodeView.update = function (
+          node: any,
+          decorations: any,
+          innerDecorations: any,
+        ) {
+          if (node.type !== this.node.type) return false;
+          const oldNode = this.node;
+          const oldDecorations = this.decorations;
+          const oldInnerDecorations = this.innerDecorations;
+          this.node = node;
+          this.decorations = decorations;
+          this.innerDecorations = innerDecorations;
+          return customUpdate.call(this, {
+            oldNode,
+            oldDecorations,
+            newNode: node,
+            newDecorations: decorations,
+            oldInnerDecorations,
+            innerDecorations,
+            updateProps: () => {
+              this.renderer.updateProps({
+                node,
+                decorations,
+                innerDecorations,
+                extension: this.extensionWithSyncedStorage,
+              });
+              if (typeof this.options.attrs === "function") {
+                this.updateElementAttributes();
+              }
+            },
+          });
+        };
+      }
       return nodeView;
     };
   },
