@@ -219,22 +219,6 @@ export function BlockView(props: NodeViewProps) {
 
         <div className="flex-1 min-w-0 pr-1">
           <NodeViewContent />
-
-          {Array.isArray(node.attrs.tags) && node.attrs.tags.length > 0 && (
-            <div
-              contentEditable={false}
-              className="mt-0.5 flex flex-wrap gap-1 text-[10px] font-mono opacity-60 group-hover:opacity-100 transition-opacity select-none"
-            >
-              {(node.attrs.tags as string[]).map((t) => (
-                <span
-                  key={t}
-                  className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                >
-                  #{t}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 

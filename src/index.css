@@ -229,6 +229,25 @@ body.mochi-dragging * {
   border-radius: 1px;
 }
 
+/* Native window-drag for any element flagged as a Tauri drag region. We use
+   the CSS form *in addition to* Tauri's `data-tauri-drag-region` attribute
+   because the latter is occasionally flaky depending on the WebView state.
+   Interactive children (inputs, buttons, textareas, links, contenteditables)
+   opt out so clicks behave normally. */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea,
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] select,
+[data-tauri-drag-region] [contenteditable="true"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* search highlight */
 mark { background: oklch(0.95 0.1 100); padding: 0 2px; border-radius: 2px; }
 @media (prefers-color-scheme: dark) {

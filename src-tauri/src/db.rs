@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
@@ -203,37 +203,28 @@ pub fn save_snapshot(
     let mut changed: Vec<String> = Vec::new();
 
     for b in blocks {
-        let prior: Option<(String, i64, i64)> = tx
+        let prior: Option<(String, i64)> = tx
             .query_row(
-                "SELECT content_hash, created_at, manual_tags FROM blocks WHERE id = ?1",
+                "SELECT content_hash, created_at FROM blocks WHERE id = ?1",
                 params![b.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
 
         let new_hash = parser::hash(&b.content);
         let extracted = parser::extract_hashtags(&b.content);
+        let tags_json = serde_json::to_string(&extracted)?;
 
-        let (created_at, manual_tags, content_changed, parent_hash, tags_json) = match prior {
-            Some((prior_hash, created, manual)) => {
+        // Tags are always derived from inline content. The legacy
+        // `manual_tags` column is forced back to 0 on every save so blocks
+        // marked manual by old code paths heal automatically.
+        let manual_tags: i64 = 0;
+        let (created_at, content_changed, parent_hash) = match prior {
+            Some((prior_hash, created)) => {
                 let changed_now = prior_hash != new_hash;
-                let tags = if manual != 0 {
-                    // preserve existing tags column
-                    let existing: String = tx.query_row(
-                        "SELECT tags FROM blocks WHERE id = ?1",
-                        params![b.id],
-                        |row| row.get(0),
-                    )?;
-                    existing
-                } else {
-                    serde_json::to_string(&extracted)?
-                };
-                (created, manual, changed_now, Some(prior_hash), tags)
+                (created, changed_now, Some(prior_hash))
             }
-            None => {
-                let tags = serde_json::to_string(&extracted)?;
-                (now, 0i64, true, None, tags)
-            }
+            None => (now, true, None),
         };
 
         tx.execute(
@@ -247,6 +238,7 @@ pub fn save_snapshot(
                content=excluded.content,
                content_hash=excluded.content_hash,
                tags=excluded.tags,
+               manual_tags=excluded.manual_tags,
                updated_at=CASE WHEN blocks.content_hash=excluded.content_hash
                                AND blocks.position=excluded.position
                                AND blocks.parent_id IS excluded.parent_id
@@ -299,12 +291,34 @@ pub fn save_snapshot(
     Ok(changed)
 }
 
-pub fn set_manual_tags(conn: &Connection, id: &str, tags: &[String]) -> Result<()> {
-    let json = serde_json::to_string(&tags)?;
-    conn.execute(
-        "UPDATE blocks SET tags = ?1, manual_tags = 1, updated_at = ?2 WHERE id = ?3",
-        params![json, Utc::now().timestamp_millis(), id],
-    )?;
+/// One-shot migration: clear the legacy `manual_tags=1` flag on every block
+/// and recompute the `tags` column from the block's inline content. Also
+/// rebuilds the FTS row so search reflects the (possibly newly-extracted)
+/// tag list. Used by the v2 → v3 schema upgrade.
+pub fn heal_manual_tags(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    let rows: Vec<(String, String)> = {
+        let mut stmt = tx.prepare("SELECT id, content FROM blocks")?;
+        let collected: rusqlite::Result<Vec<_>> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect();
+        collected?
+    };
+    for (id, content) in rows {
+        let extracted = parser::extract_hashtags(&content);
+        let tags_json = serde_json::to_string(&extracted)?;
+        tx.execute(
+            "UPDATE blocks SET tags = ?1, manual_tags = 0 WHERE id = ?2",
+            params![tags_json, id],
+        )?;
+        tx.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
+        tx.execute(
+            "INSERT INTO blocks_fts(id, content, tags, heading)
+             SELECT id, content, ?1, COALESCE(heading, '') FROM blocks WHERE id = ?2",
+            params![extracted.join(" "), id],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./sidebar/Sidebar";
 import { CanvasEditor } from "./editor/CanvasEditor";
 import { ChatBox } from "./editor/ChatBox";
-import { TagPage } from "./tag-view/TagPage";
+import { TagsView } from "./tags-view/TagsView";
 import { SettingsModal } from "./settings/SettingsModal";
-import { ChronoView } from "./chrono/ChronoView";
-import { ViewModeToggle, type ViewMode } from "./chrono/ViewModeToggle";
+import { TopBarSearch } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
+import { useDragRegion } from "./hooks/useDragRegion";
 import { ipc } from "./lib/ipc";
+
+export type MainView = "canvas" | "tags";
 
 export default function App() {
   const path = useWorkspace((s) => s.path);
@@ -16,32 +18,49 @@ export default function App() {
   const loading = useWorkspace((s) => s.loading);
   const reload = useWorkspace((s) => s.reload);
 
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [mainView, setMainView] = useState<MainView>("canvas");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("canvas");
 
-  // Boot the workspace on mount. With the new app-data-dir bootstrap, there's
-  // no folder picker landing screen — the user lands directly in their notes.
+  const headerRef = useRef<HTMLElement>(null);
+  useDragRegion(headerRef);
+
   useEffect(() => {
     bootstrap();
   }, [bootstrap]);
 
-  // ⌘F / Ctrl+F → focus search.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
         e.preventDefault();
         e.stopPropagation();
         window.dispatchEvent(new Event("mochi:focus-search"));
+        return;
+      }
+      // Cmd-Z in the tags / search view: undo the last bulk action.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "z" &&
+        !e.shiftKey &&
+        (mainView === "tags" || searchQuery.trim().length > 0)
+      ) {
+        const target = e.target as HTMLElement | null;
+        const inEditable =
+          !!target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable);
+        if (inEditable) return;
+        e.preventDefault();
+        useWorkspace.getState().undoLast();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [mainView, searchQuery]);
 
-  // Agent-edit detector: poll blocks.db mtime every 2s. If it changes
-  // unexpectedly (i.e. not as a result of our own save), reload the block list
-  // so external writes (an agent UPDATEing rows directly) flow into the editor.
+  // Agent-edit detector: poll blocks.db mtime every 2s.
   useEffect(() => {
     if (!path) return;
     let cancelled = false;
@@ -85,8 +104,9 @@ export default function App() {
   }
 
   const jumpTo = (id: string) => {
-    if (activeTag) setActiveTag(null);
-    if (viewMode !== "canvas") setViewMode("canvas");
+    setMainView("canvas");
+    setTagFilter(null);
+    setSearchQuery("");
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-block-id="${CSS.escape(id)}"]`);
       if (el) {
@@ -102,25 +122,71 @@ export default function App() {
   return (
     <div className="h-full flex">
       <Sidebar
-        onOpenTag={setActiveTag}
+        mainView={mainView}
+        tagFilter={tagFilter}
+        onShowCanvas={() => {
+          setMainView("canvas");
+          setTagFilter(null);
+          setSearchQuery("");
+        }}
+        onShowTags={() => {
+          setMainView("tags");
+          setSearchQuery("");
+        }}
+        onSelectTag={(tag) => {
+          setMainView("tags");
+          setTagFilter(tag);
+          setSearchQuery("");
+        }}
+        onClearFilter={() => {
+          setMainView("tags");
+          setTagFilter(null);
+        }}
         onJumpToBlock={jumpTo}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="px-4 py-2 border-b border-neutral-200 dark:border-neutral-800 text-xs text-neutral-500 flex items-center gap-2">
-          {!activeTag && (
-            <ViewModeToggle value={viewMode} onChange={setViewMode} />
-          )}
+        {/* Search header lives only over the main panel — the sidebar gets
+            the rest of the title-bar row to itself (with traffic-light
+            padding). `data-tauri-drag-region` lets the user drag by the
+            empty parts of the bar; the input opts out automatically. */}
+        <header
+          ref={headerRef}
+          data-tauri-drag-region
+          className="flex items-center gap-3 px-3 h-11 border-b border-neutral-200 dark:border-neutral-800 bg-white/60 dark:bg-neutral-950/60 backdrop-blur select-none shrink-0"
+        >
+          <TopBarSearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+            tagFilter={mainView === "tags" ? tagFilter : null}
+          />
         </header>
-        {activeTag ? (
-          <TagPage tag={activeTag} onClose={() => setActiveTag(null)} />
-        ) : viewMode === "canvas" ? (
-          <>
-            <CanvasEditor key={path} />
-            <ChatBox />
-          </>
+        {mainView === "canvas" ? (
+          searchQuery.trim() ? (
+            // Canvas-mode search: show a read-only list of matching blocks.
+            // Clicking a row jumps to that block on the canvas.
+            <TagsView
+              tagFilter={null}
+              searchQuery={searchQuery}
+              readOnly
+              onClearFilter={() => {}}
+              onClearSearch={() => setSearchQuery("")}
+              onJumpToBlock={jumpTo}
+            />
+          ) : (
+            <>
+              <CanvasEditor key={path} />
+              <ChatBox />
+            </>
+          )
         ) : (
-          <ChronoView mode={viewMode} onJumpToBlock={jumpTo} />
+          <TagsView
+            tagFilter={tagFilter}
+            searchQuery={searchQuery}
+            onClearFilter={() => setTagFilter(null)}
+            onClearSearch={() => setSearchQuery("")}
+            onJumpToBlock={jumpTo}
+          />
         )}
       </main>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

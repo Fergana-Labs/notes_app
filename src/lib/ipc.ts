@@ -97,10 +97,10 @@ export const ipc = {
     invoke<SaveResult>("save_blocks", {
       args: { blocks, deleted_ids: deletedIds, source },
     }),
-  setBlockTags: (id: string, tags: string[], manual: boolean) =>
-    invoke<void>("set_block_tags", { args: { id, tags, manual } }),
   listVersions: (id: string) =>
     invoke<BlockVersion[]>("list_versions", { id }),
+  writeTextFile: (path: string, content: string) =>
+    invoke<void>("write_text_file", { path, content }),
   getSetting: (key: string) => invoke<string | null>("get_setting", { key }),
   setSetting: (key: string, value: string) =>
     invoke<void>("set_setting", { key, value }),

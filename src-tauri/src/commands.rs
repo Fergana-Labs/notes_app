@@ -181,26 +181,17 @@ pub fn save_blocks(args: SaveBlocksArgs, state: State<'_, AppState>) -> Result<S
     })
 }
 
-#[derive(Debug, Deserialize)]
-pub struct SetTagsArgs {
-    pub id: String,
-    pub tags: Vec<String>,
-    pub manual: bool,
-}
-
-#[tauri::command]
-pub fn set_block_tags(args: SetTagsArgs, state: State<'_, AppState>) -> Result<()> {
-    state.with(|ws| {
-        if args.manual {
-            db::set_manual_tags(&ws.db, &args.id, &args.tags)?;
-        }
-        Ok(())
-    })
-}
-
 #[tauri::command]
 pub fn list_versions(id: String, state: State<'_, AppState>) -> Result<Vec<BlockVersion>> {
     state.with(|ws| db::list_versions(&ws.db, &id))
+}
+
+/// Write a UTF-8 text file at `path`. Used for ad-hoc exports (e.g. dumping
+/// selected blocks to a markdown file picked via the save dialog).
+#[tauri::command]
+pub fn write_text_file(path: String, content: String) -> Result<()> {
+    std::fs::write(PathBuf::from(&path), content)?;
+    Ok(())
 }
 
 #[tauri::command]

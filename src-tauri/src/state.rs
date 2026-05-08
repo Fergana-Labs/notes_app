@@ -113,27 +113,37 @@ impl AppState {
             return Ok(());
         }
 
-        let canvas = root.join("canvas.md");
-        if canvas.exists() {
-            let raw = std::fs::read_to_string(&canvas).unwrap_or_default();
-            let parsed = crate::parser::migration::parse(&raw);
-            let inputs: Vec<BlockInput> = parsed
-                .into_iter()
-                .map(|b| BlockInput {
-                    id: b.id,
-                    content: b.content,
-                    position: b.position,
-                    parent_id: b.parent_id,
-                    heading: b.heading,
-                    heading_level: b.heading_level,
-                })
-                .collect();
-            if !inputs.is_empty() {
-                db::save_snapshot(conn, &inputs, &[], "migration")?;
+        // v0 → v2: import legacy canvas.md if present.
+        if current < 2 {
+            let canvas = root.join("canvas.md");
+            if canvas.exists() {
+                let raw = std::fs::read_to_string(&canvas).unwrap_or_default();
+                let parsed = crate::parser::migration::parse(&raw);
+                let inputs: Vec<BlockInput> = parsed
+                    .into_iter()
+                    .map(|b| BlockInput {
+                        id: b.id,
+                        content: b.content,
+                        position: b.position,
+                        parent_id: b.parent_id,
+                        heading: b.heading,
+                        heading_level: b.heading_level,
+                    })
+                    .collect();
+                if !inputs.is_empty() {
+                    db::save_snapshot(conn, &inputs, &[], "migration")?;
+                }
+                // Rename so the new app stops reading the old file but the
+                // user can still inspect / recover it.
+                let _ = std::fs::rename(&canvas, root.join("canvas.md.legacy-pre-sqlite"));
             }
-            // Rename so the new app stops reading the old file but the user
-            // can still inspect / recover it.
-            let _ = std::fs::rename(&canvas, root.join("canvas.md.legacy-pre-sqlite"));
+        }
+
+        // v2 → v3: tags are now always inline-derived. Heal any rows still
+        // carrying the legacy `manual_tags=1` flag by resetting the flag
+        // and re-extracting tags from each row's content.
+        if current < 3 {
+            db::heal_manual_tags(conn)?;
         }
 
         db::set_setting(

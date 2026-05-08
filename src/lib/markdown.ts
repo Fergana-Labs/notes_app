@@ -71,6 +71,22 @@ export function docToMarkdown(editor: Editor): string {
 const BLOCK_MARKER = /<!-- block:([0-9A-HJKMNP-TV-Z]{26}) -->\n/g;
 
 /**
+ * Tiptap-markdown's serializer escapes `#` at the start of a line as `\#`
+ * so it isn't mistaken for a heading. That's the right call for actual
+ * leading `# ` (heading marker) text, but it also escapes inline-style
+ * hashtags like `#yo` typed at the start of a paragraph. The Rust-side
+ * hashtag regex requires whitespace or start-of-line before `#`, and `\`
+ * is neither — so without this pass, brand-new tags entered at the start
+ * of a block would never make it into the `tags` index.
+ *
+ * We unescape only when followed by a tag-name letter (no space), which
+ * leaves real escaped `# ` heading-prefixes alone.
+ */
+export function unescapeInlineHashtags(md: string): string {
+  return md.replace(/(^|\n)\\#(?=[A-Za-z])/g, "$1#");
+}
+
+/**
  * Snapshot the editor's current block list as `BlockInput`s ready to send to
  * `ipc.saveBlocks`. Each item carries its serialized markdown content,
  * structural position, and heading/parent_id metadata derived from the
@@ -132,8 +148,8 @@ function splitMarkdownByMarkers(md: string): Map<string, string> {
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i].markerEnd;
     const end = i + 1 < matches.length ? matches[i + 1].start : md.length;
-    const content = md.substring(start, end).replace(/\s+$/, "");
-    map.set(matches[i].id, content);
+    const raw = md.substring(start, end).replace(/\s+$/, "");
+    map.set(matches[i].id, unescapeInlineHashtags(raw));
   }
   return map;
 }

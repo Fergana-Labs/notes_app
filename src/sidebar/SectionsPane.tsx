@@ -134,9 +134,6 @@ export function SectionsPane({ onJump }: { onJump: (id: string) => void }) {
           </ul>
         </SortableContext>
       </DndContext>
-      <p className="mt-2 px-2 text-[10px] text-neutral-400 italic">
-        Drag any heading's grip to reorder its section on the canvas.
-      </p>
     </div>
   );
 }
@@ -165,12 +162,12 @@ function SortableHeading({
     <li
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      className="group flex items-center gap-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
     >
       <button
         {...attributes}
         {...listeners}
-        className="px-1 py-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-grab active:cursor-grabbing shrink-0"
+        className="px-1 py-1 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 cursor-grab active:cursor-grabbing shrink-0 invisible group-hover:visible"
         title="Drag to reorder"
         aria-label="Drag handle"
       >
