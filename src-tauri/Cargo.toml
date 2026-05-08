@@ -1,6 +1,6 @@
 [package]
 name = "mochi"
-version = "0.1.1"
+version = "0.1.2"
 description = "Mochi — local-first markdown notes"
 authors = ["Mochi"]
 edition = "2021"
