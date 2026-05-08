@@ -2,11 +2,21 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 
 /**
- * Dev-only typing profiler. Wraps `editor.view.dispatch` so every transaction
- * is timed end-to-end (state.apply + view.updateState + DOM reconciliation),
- * and decomposes the cost across the doc state.apply, the view dispatch
- * itself, and a synthetic post-paint marker so we can see what slice of a
- * keystroke is on whom.
+ * Dev-only typing profiler. Wraps the editor view's `dispatch` so every
+ * transaction is timed end-to-end — but, critically, the wrapper still
+ * calls the original `dispatch`, so Tiptap's `_props.dispatchTransaction`
+ * (which is what emits the `transaction` / `update` / `selectionUpdate`
+ * events that fire our `onUpdate` save callback and the bubble-menu
+ * position update) runs untouched. An earlier version of this profiler
+ * called `state.apply` + `view.updateState` directly and bypassed all of
+ * that — making dev appear artificially fast because save work, bubble
+ * menu updates, etc. were silently being skipped.
+ *
+ * Breakdown: Tiptap emits `beforeTransaction` after `state.applyTransaction`
+ * but before `view.updateState`, and emits `transaction` after the view
+ * update finishes. We straddle those two events to split the total into
+ * `apply` (state.applyTransaction) vs `viewUpdate` (DOM reconcile +
+ * NodeView walks).
  *
  * Output:
  *  - `console.warn` on any transaction slower than `slowMs` (default 8)
@@ -93,81 +103,93 @@ export const PerfProfile = Extension.create({
 
   addProseMirrorPlugins() {
     const stats = ensureStats();
+    const editor = this.editor;
+    let txN = 0;
+    // Pending state for the in-flight transaction. Set when our dispatch
+    // wrapper enters; consumed by the `transaction` event listener.
+    let pending: { n: number; t0: number; tApplyEnd: number | null } | null = null;
+
+    // Tiptap fires `beforeTransaction` after state.applyTransaction but
+    // before view.updateState. We use it to mark the boundary between
+    // the "apply" and "viewUpdate" slices.
+    editor.on("beforeTransaction", () => {
+      if (pending) pending.tApplyEnd = performance.now();
+    });
+
+    // `transaction` fires after view.updateState completes. We close out
+    // the pending entry here (rather than after origDispatch returns)
+    // because some Tiptap dispatches (e.g. `editor.view.dispatch` from
+    // PM input handlers) re-enter through the wrapped dispatch — but the
+    // event is the canonical "transaction finished" signal.
+    editor.on("transaction", ({ transaction }) => {
+      if (!pending) return;
+      const t1 = performance.now();
+      const total = t1 - pending.t0;
+      const apply = pending.tApplyEnd != null ? pending.tApplyEnd - pending.t0 : 0;
+      const viewUpdate = pending.tApplyEnd != null ? t1 - pending.tApplyEnd : total;
+      const n = pending.n;
+      pending = null;
+
+      performance.mark(`mochi:tx${n}:end`);
+      try {
+        performance.measure(`mochi:tx${n}`, `mochi:tx${n}:start`, `mochi:tx${n}:end`);
+      } catch {
+        /* mark race */
+      }
+
+      stats.txTimes.push(total);
+      if (stats.txTimes.length > RING_SIZE) stats.txTimes.shift();
+
+      const childCount = editor.state.doc.childCount;
+      stats.recent.push({
+        n,
+        total,
+        apply,
+        viewUpdate,
+        docChanged: transaction.docChanged,
+        childCount,
+        ts: pending ? (pending as any).t0 : t1,
+      });
+      if (stats.recent.length > RING_SIZE) stats.recent.shift();
+
+      if (!stats.slowest || total > stats.slowest.total) {
+        stats.slowest = { n, total, apply, viewUpdate, ts: t1 };
+      }
+
+      if (total >= stats.slowMs) {
+        console.warn(
+          `[perf] tx#${n} ${total.toFixed(1)}ms · apply ${apply.toFixed(1)} · viewUpdate ${viewUpdate.toFixed(1)} · childCount ${childCount} · docChanged ${transaction.docChanged}`,
+        );
+      }
+    });
+
     return [
       new Plugin({
         key: perfKey,
         view(view) {
+          // Wrap `view.dispatch` so we can stamp t0 *before* state.apply
+          // runs. CRITICAL: we delegate to the original `view.dispatch`
+          // (which routes through Tiptap's `_props.dispatchTransaction`),
+          // so all Tiptap event firing — `update`, `transaction`,
+          // `selectionUpdate`, the focus/blur path — runs untouched.
+          // Bypassing it would silently break onUpdate callbacks and is
+          // exactly the bug the previous version of this profiler had.
           const origDispatch = view.dispatch.bind(view);
-          let txN = 0;
-
-          // Wrap view.dispatch so we can time the entire pipeline:
-          //   - state.apply across all plugins (`apply` slice)
-          //   - view.updateState DOM reconciliation (`viewUpdate` slice)
-          // ProseMirror calls `state.apply(tr)` then `view.updateState(state)`
-          // back-to-back inside the default dispatch. We split them by
-          // re-implementing that here (mirrors the upstream default).
           (view as any).dispatch = (tr: any) => {
             if (!stats.enabled) {
               origDispatch(tr);
               return;
             }
             const n = ++txN;
-            performance.mark(`mochi:tx${n}:start`);
             const t0 = performance.now();
-
-            // state.apply
-            const t1 = performance.now();
-            const newState = view.state.apply(tr);
-            const t2 = performance.now();
-
-            // view.updateState — this is the DOM reconcile step
-            performance.mark(`mochi:tx${n}:viewUpdate-start`);
-            view.updateState(newState);
-            performance.mark(`mochi:tx${n}:viewUpdate-end`);
-            const t3 = performance.now();
-
-            performance.mark(`mochi:tx${n}:end`);
-            try {
-              performance.measure(`mochi:tx${n}`, `mochi:tx${n}:start`, `mochi:tx${n}:end`);
-              performance.measure(
-                `mochi:tx${n}:viewUpdate`,
-                `mochi:tx${n}:viewUpdate-start`,
-                `mochi:tx${n}:viewUpdate-end`,
-              );
-            } catch {
-              /* mark cleanup races are fine */
-            }
-
-            const total = t3 - t0;
-            const apply = t2 - t1;
-            const viewUpdate = t3 - t2;
-
-            stats.txTimes.push(total);
-            if (stats.txTimes.length > RING_SIZE) stats.txTimes.shift();
-
-            const entry = {
-              n,
-              total,
-              apply,
-              viewUpdate,
-              docChanged: tr.docChanged,
-              childCount: newState.doc.childCount,
-              ts: t0,
-            };
-            stats.recent.push(entry);
-            if (stats.recent.length > RING_SIZE) stats.recent.shift();
-
-            if (!stats.slowest || total > stats.slowest.total) {
-              stats.slowest = { n, total, apply, viewUpdate, ts: t0 };
-            }
-
-            if (total >= stats.slowMs) {
-              console.warn(
-                `[perf] tx#${n} ${total.toFixed(1)}ms · apply ${apply.toFixed(1)} · viewUpdate ${viewUpdate.toFixed(1)} · childCount ${newState.doc.childCount} · docChanged ${tr.docChanged}`,
-              );
-            }
+            pending = { n, t0, tApplyEnd: null };
+            performance.mark(`mochi:tx${n}:start`);
+            origDispatch(tr);
+            // If `transaction` event didn't fire (e.g. tr suppressed by
+            // captureTransaction), drop the pending entry so the next tx
+            // starts clean.
+            if (pending && pending.n === n) pending = null;
           };
-
           return {};
         },
       }),
