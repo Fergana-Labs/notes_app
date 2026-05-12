@@ -97,6 +97,16 @@ export default function App() {
     };
   }, [path, reload]);
 
+  // Push the current search query + active block into the editor so its
+  // SearchHighlight plugin can underline every match in place. Lives ABOVE
+  // the splash early-return — hooks must be called unconditionally, in the
+  // same order, on every render (React error #310 otherwise).
+  useEffect(() => {
+    const editor = getCanvasEditor();
+    if (!editor) return;
+    setSearchState(editor, searchQuery.trim(), searchActiveId);
+  }, [searchQuery, searchActiveId]);
+
   if (!path) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -146,14 +156,6 @@ export default function App() {
       }
     });
   };
-
-  // Push the current search query + active block into the editor so its
-  // SearchHighlight plugin can underline every match in place.
-  useEffect(() => {
-    const editor = getCanvasEditor();
-    if (!editor) return;
-    setSearchState(editor, searchQuery.trim(), searchActiveId);
-  }, [searchQuery, searchActiveId]);
 
   return (
     <div className="h-full flex">
