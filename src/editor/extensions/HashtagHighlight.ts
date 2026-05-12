@@ -134,6 +134,18 @@ export const HashtagHighlight = Extension.create({
               pos += newChild.nodeSize;
             }
 
+            // If many blocks changed in one transaction (sidebar drag-
+            // reorder, undo of a bulk save, paste of a big chunk), the
+            // mapping can collapse old decos onto unrelated positions —
+            // `next.find` then misses them, leaving orphan/stale pills
+            // visible. Cheaper and more correct to just rebuild.
+            if (
+              changed.length > 16 ||
+              changed.length > newDoc.childCount / 2
+            ) {
+              return buildDocWide(newDoc);
+            }
+
             // Remap existing decorations to new positions (cheap — PM keeps
             // the decoset as a tree and shifts positions internally).
             let next = prev.map(tr.mapping, newDoc);

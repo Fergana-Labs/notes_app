@@ -23,6 +23,7 @@ import { BlockDragHandle } from "./extensions/BlockDragHandle";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import { FastPlaceholder } from "./extensions/FastPlaceholder";
 import { PerfProfile } from "./extensions/PerfProfile";
+import { SearchHighlight } from "./extensions/SearchHighlight";
 import { BlockBubbleMenu } from "./BubbleMenu";
 import { VersionHistoryModal } from "./VersionHistoryModal";
 import { setCanvasEditor } from "./editorRef";
@@ -148,6 +149,7 @@ export function CanvasEditor() {
       BlockDragHandle,
       ClipboardSerialize,
       KeyboardActions,
+      SearchHighlight,
       // Dev-only: logs slow transactions to the console with a breakdown
       // of state.apply vs view.updateState. Inspect via `window.__mochiPerf`
       // (call `__mochiPerf.summary()` for percentiles). See PerfProfile.ts.
@@ -195,7 +197,15 @@ export function CanvasEditor() {
               id,
               prior?.parent_id ?? null,
             );
-            if (!b || (prior && b.heading_level !== prior.heading_level)) {
+            // Heading_level change ⇒ heading hierarchy may have shifted,
+            // so we must recompute parent_id for every block (full snapshot).
+            // This includes brand-new blocks (prior === undefined) that
+            // arrive as headings: without the full pass, they'd be saved
+            // with parent_id=null even when they belong under a parent
+            // heading. Also covers the markdown `# ` input rule converting
+            // a paragraph in-place.
+            const priorLevel = prior?.heading_level ?? null;
+            if (!b || b.heading_level !== priorLevel) {
               fullSnapshot = true;
               break;
             }
@@ -305,6 +315,16 @@ export function CanvasEditor() {
     window.addEventListener("mochi:show-history", handler);
     return () => window.removeEventListener("mochi:show-history", handler);
   }, []);
+
+  // Force the pending debounced save to run now. Used by structural
+  // canvas operations (block drag-reorder, etc.) so the sidebar — which
+  // reads from the saved blocks store — stays in sync with the canvas.
+  useEffect(() => {
+    const flush = () => saveDebounced.flush();
+    window.addEventListener("mochi:request-save-flush", flush);
+    return () =>
+      window.removeEventListener("mochi:request-save-flush", flush);
+  }, [saveDebounced]);
 
   return (
     <div className="flex-1 overflow-y-auto px-6 pt-6 pb-32 cursor-text relative">

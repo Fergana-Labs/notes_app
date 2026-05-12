@@ -223,6 +223,7 @@ html, body, #root {
 .mochi-block-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 60px;
+  margin-bottom: 6px;
 }
 
 /* fade the source block while it's being dragged */
@@ -269,4 +270,29 @@ body.mochi-dragging * {
 mark { background: oklch(0.95 0.1 100); padding: 0 2px; border-radius: 2px; }
 @media (prefers-color-scheme: dark) {
   mark { background: oklch(0.5 0.15 100); color: white; }
+}
+
+/* In-editor inline highlights for the active top-bar search query. The
+   "active" variant is applied to matches inside the block the user most
+   recently jumped to from the sidebar results — visually distinguishes
+   the current focus from background hits in other blocks. */
+.mochi-search-hit {
+  background: oklch(0.95 0.12 95);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px oklch(0.85 0.12 95);
+}
+.mochi-search-hit-active {
+  background: oklch(0.88 0.18 60);
+  box-shadow: 0 0 0 1px oklch(0.65 0.2 60);
+}
+@media (prefers-color-scheme: dark) {
+  .mochi-search-hit {
+    background: oklch(0.5 0.15 95);
+    color: white;
+    box-shadow: 0 0 0 1px oklch(0.7 0.15 95);
+  }
+  .mochi-search-hit-active {
+    background: oklch(0.65 0.2 60);
+    color: black;
+  }
 }

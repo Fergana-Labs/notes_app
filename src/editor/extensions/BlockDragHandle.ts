@@ -187,6 +187,12 @@ class DragController {
     const mappedDrop = tr.mapping.map(dropPos, -1);
     tr = tr.insert(mappedDrop, m.sourceNode);
     this.view.dispatch(tr);
+
+    // Let the canvas save loop know it should flush the pending save
+    // immediately — the sidebar's section list is driven by the saved
+    // blocks store, so without this it lags ~300ms behind the canvas
+    // (the debounce window) and the headings appear out of order.
+    window.dispatchEvent(new Event("mochi:request-save-flush"));
   }
 
   private handleKeyDown(e: KeyboardEvent) {

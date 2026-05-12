@@ -118,6 +118,12 @@ export function SectionsPane({ onJump }: { onJump: (id: string) => void }) {
 
     const tr = editor.state.tr.replaceWith(0, doc.content.size, newContent);
     editor.view.dispatch(tr);
+    // Flush canvas save immediately so the next render of this pane
+    // reads the new heading order from the store. Without this, the
+    // optimistic dnd-kit transform clears before the 300ms debounced
+    // save fires — the heading snaps back to its old slot for a beat,
+    // then jumps to the new one.
+    window.dispatchEvent(new Event("mochi:request-save-flush"));
   };
 
   if (headings.length === 0) {

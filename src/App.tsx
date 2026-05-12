@@ -8,6 +8,8 @@ import { TopBarSearch } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
 import { useDragRegion } from "./hooks/useDragRegion";
 import { ipc } from "./lib/ipc";
+import { getCanvasEditor } from "./editor/editorRef";
+import { setSearchState } from "./editor/extensions/SearchHighlight";
 
 export type MainView = "canvas" | "tags";
 
@@ -21,6 +23,9 @@ export default function App() {
   const [mainView, setMainView] = useState<MainView>("canvas");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  // Block id the user most recently jumped to from a search result.
+  // Drives the "active" variant of the in-editor search highlight.
+  const [searchActiveId, setSearchActiveId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const headerRef = useRef<HTMLElement>(null);
@@ -113,6 +118,7 @@ export default function App() {
     setMainView("canvas");
     setTagFilter(null);
     setSearchQuery("");
+    setSearchActiveId(null);
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-block-id="${CSS.escape(id)}"]`);
       if (el) {
@@ -125,30 +131,60 @@ export default function App() {
     });
   };
 
+  // Search-result jump: keeps the query (and the sidebar results panel)
+  // intact so the user can flip between matches, and tags the focused
+  // block id so the SearchHighlight extension can up-shade matches
+  // inside it. Mirrors Apple Notes' search behavior.
+  const jumpToSearchResult = (id: string) => {
+    setMainView("canvas");
+    setTagFilter(null);
+    setSearchActiveId(id);
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-block-id="${CSS.escape(id)}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  };
+
+  // Push the current search query + active block into the editor so its
+  // SearchHighlight plugin can underline every match in place.
+  useEffect(() => {
+    const editor = getCanvasEditor();
+    if (!editor) return;
+    setSearchState(editor, searchQuery.trim(), searchActiveId);
+  }, [searchQuery, searchActiveId]);
+
   return (
     <div className="h-full flex">
       <Sidebar
         mainView={mainView}
         tagFilter={tagFilter}
+        searchQuery={searchQuery}
+        searchActiveId={searchActiveId}
         onShowCanvas={() => {
           setMainView("canvas");
           setTagFilter(null);
           setSearchQuery("");
+          setSearchActiveId(null);
         }}
         onShowTags={() => {
           setMainView("tags");
           setSearchQuery("");
+          setSearchActiveId(null);
         }}
         onSelectTag={(tag) => {
           setMainView("tags");
           setTagFilter(tag);
           setSearchQuery("");
+          setSearchActiveId(null);
         }}
         onClearFilter={() => {
           setMainView("tags");
           setTagFilter(null);
         }}
         onJumpToBlock={jumpTo}
+        onJumpToSearchResult={jumpToSearchResult}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -178,25 +214,12 @@ export default function App() {
         <div
           className="flex-1 flex flex-col overflow-hidden"
           style={{
-            display:
-              mainView === "canvas" && !searchQuery.trim() ? "flex" : "none",
+            display: mainView === "canvas" ? "flex" : "none",
           }}
         >
           <CanvasEditor key={path} />
           <ChatBox />
         </div>
-
-        {mainView === "canvas" && searchQuery.trim() && (
-          // Canvas-mode search: read-only list of matching blocks.
-          <TagsView
-            tagFilter={null}
-            searchQuery={searchQuery}
-            readOnly
-            onClearFilter={() => {}}
-            onClearSearch={() => setSearchQuery("")}
-            onJumpToBlock={jumpTo}
-          />
-        )}
 
         {mainView === "tags" && (
           <TagsView

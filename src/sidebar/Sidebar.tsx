@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ListTree, Hash, Settings as SettingsIcon } from "lucide-react";
+import { ListTree, Hash, Search, Settings as SettingsIcon } from "lucide-react";
 import { SectionsPane } from "./SectionsPane";
 import { TagsPane } from "./TagsPane";
+import { SearchResultsPane } from "./SearchResultsPane";
 import { useDragRegion } from "../hooks/useDragRegion";
 import type { MainView } from "../App";
 
@@ -10,11 +11,14 @@ type Tab = "canvas" | "tags";
 interface Props {
   mainView: MainView;
   tagFilter: string | null;
+  searchQuery: string;
+  searchActiveId: string | null;
   onShowCanvas: () => void;
   onShowTags: () => void;
   onSelectTag: (tag: string) => void;
   onClearFilter: () => void;
   onJumpToBlock: (id: string) => void;
+  onJumpToSearchResult: (id: string) => void;
   onOpenSettings: () => void;
 }
 
@@ -32,11 +36,14 @@ interface Props {
 export function Sidebar({
   mainView,
   tagFilter,
+  searchQuery,
+  searchActiveId,
   onShowCanvas,
   onShowTags,
   onSelectTag,
   onClearFilter,
   onJumpToBlock,
+  onJumpToSearchResult,
   onOpenSettings,
 }: Props) {
   const [tab, setTab] = useState<Tab>(mainView === "canvas" ? "canvas" : "tags");
@@ -47,6 +54,13 @@ export function Sidebar({
     if (mainView === "canvas") setTab("canvas");
     else setTab("tags");
   }, [mainView]);
+
+  // Search pane only swaps in for canvas-mode search — tags mode keeps
+  // its native TagsPane / TagsView FTS filtering. (Canvas mode has no
+  // built-in "filter the editor"; that's where the sidebar match list
+  // earns its keep.)
+  const searchActive =
+    mainView === "canvas" && searchQuery.trim().length > 0;
 
   return (
     <aside className="w-72 border-r border-neutral-200 dark:border-neutral-800 flex flex-col bg-white/40 dark:bg-neutral-950/40 backdrop-blur shrink-0">
@@ -59,34 +73,55 @@ export function Sidebar({
         data-tauri-drag-region
         className="flex h-11 pl-[80px] border-b border-neutral-200 dark:border-neutral-800 text-xs select-none"
       >
-        <TabBtn
-          label="Canvas"
-          icon={<ListTree size={14} />}
-          active={tab === "canvas"}
-          onClick={() => {
-            setTab("canvas");
-            onShowCanvas();
-          }}
-        />
-        <TabBtn
-          label="Tags"
-          icon={<Hash size={14} />}
-          active={tab === "tags"}
-          onClick={() => {
-            setTab("tags");
-            onShowTags();
-          }}
-        />
+        {searchActive ? (
+          <TabBtn
+            label="Search"
+            icon={<Search size={14} />}
+            active
+            onClick={() => {}}
+          />
+        ) : (
+          <>
+            <TabBtn
+              label="Canvas"
+              icon={<ListTree size={14} />}
+              active={tab === "canvas"}
+              onClick={() => {
+                setTab("canvas");
+                onShowCanvas();
+              }}
+            />
+            <TabBtn
+              label="Tags"
+              icon={<Hash size={14} />}
+              active={tab === "tags"}
+              onClick={() => {
+                setTab("tags");
+                onShowTags();
+              }}
+            />
+          </>
+        )}
       </nav>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === "canvas" && <SectionsPane onJump={onJumpToBlock} />}
-        {tab === "tags" && (
-          <TagsPane
-            selected={tagFilter}
-            onOpenTag={onSelectTag}
-            onClearTag={onClearFilter}
+        {searchActive ? (
+          <SearchResultsPane
+            query={searchQuery}
+            activeId={searchActiveId}
+            onJump={(id) => onJumpToSearchResult(id)}
           />
+        ) : (
+          <>
+            {tab === "canvas" && <SectionsPane onJump={onJumpToBlock} />}
+            {tab === "tags" && (
+              <TagsPane
+                selected={tagFilter}
+                onOpenTag={onSelectTag}
+                onClearTag={onClearFilter}
+              />
+            )}
+          </>
         )}
       </div>
 

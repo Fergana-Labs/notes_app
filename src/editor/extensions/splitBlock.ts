@@ -1,4 +1,4 @@
-import type { EditorState } from "@tiptap/pm/state";
+import { TextSelection, type EditorState } from "@tiptap/pm/state";
 
 /**
  * Split the mochiBlock containing the selection.
@@ -16,14 +16,16 @@ import type { EditorState } from "@tiptap/pm/state";
  * the mochiBlock's content (first text position of first child, or last text
  * position of last child) — so we never create empty leftover blocks when
  * the user just highlighted a tail or head of the original.
+ *
+ * When the cursor is in a deeply-nested container (list, blockquote, code
+ * block), splitting through every container would produce a new mochiBlock
+ * containing a partially-nested structure — not what the user expects from
+ * "make a new block". In that case we just insert a fresh empty mochiBlock
+ * immediately after the current one and move the cursor into it.
  */
 export function splitMochiBlockAtSelection(editor: any, state: EditorState): boolean {
   const { selection } = state;
   const { $from, $to, from, to, empty } = selection;
-
-  // Only split inside a paragraph / heading directly under a mochiBlock.
-  const parent = $from.parent.type.name;
-  if (parent !== "paragraph" && parent !== "heading") return false;
 
   let blockDepth = -1;
   for (let d = $from.depth; d > 0; d--) {
@@ -33,6 +35,27 @@ export function splitMochiBlockAtSelection(editor: any, state: EditorState): boo
     }
   }
   if (blockDepth < 0) return false;
+
+  const parent = $from.parent.type.name;
+  const isDirectChild = $from.depth === blockDepth + 1;
+  const isParaOrHeading = parent === "paragraph" || parent === "heading";
+
+  // Fallback case: cursor is in a nested container (list, blockquote, code
+  // block) OR in some non-textblock context. Splitting through every layer
+  // would produce a partially-nested new mochiBlock — confusing. Just
+  // insert a fresh empty mochiBlock immediately after the current one.
+  if (!isDirectChild || !isParaOrHeading) {
+    const blockType = state.schema.nodes.mochiBlock;
+    const paraType = state.schema.nodes.paragraph;
+    if (!blockType || !paraType) return false;
+    const insertPos = $from.after(blockDepth);
+    const newBlock = blockType.create(null, paraType.create());
+    let tr = state.tr.insert(insertPos, newBlock);
+    // +2 = step inside the mochiBlock (+1) and inside the paragraph (+1).
+    tr = tr.setSelection(TextSelection.create(tr.doc, insertPos + 2));
+    editor.view.dispatch(tr.scrollIntoView());
+    return true;
+  }
 
   const blockNode = $from.node(blockDepth);
 
