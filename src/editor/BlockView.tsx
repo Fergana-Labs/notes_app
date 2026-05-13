@@ -3,6 +3,7 @@ import { GripVertical, Plus } from "lucide-react";
 import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { TextSelection } from "@tiptap/pm/state";
 import { BlockMenu } from "./BlockMenu";
+import { BLOCK_TYPES } from "./blockTypes";
 import type { StoredBlock } from "../lib/ipc";
 import { splitMochiBlockAtSelection } from "./extensions/splitBlock";
 
@@ -43,6 +44,17 @@ function BlockViewInner(props: NodeViewProps) {
   const innerName = inner?.type.name;
   const headingLevel: number | null =
     innerName === "heading" ? (inner?.attrs.level ?? null) : null;
+  const activeBlockTypeId = (() => {
+    if (headingLevel != null) return `h${headingLevel}`;
+    switch (innerName) {
+      case "bulletList": return "bullet";
+      case "orderedList": return "numbered";
+      case "taskList": return "todo";
+      case "codeBlock": return "code";
+      case "blockquote": return "quote";
+      default: return "paragraph";
+    }
+  })();
 
   // Match the gutter's icon center with the first text line for any block type.
   const gutterPt = (() => {
@@ -191,6 +203,17 @@ function BlockViewInner(props: NodeViewProps) {
       runSplit(editor, state, blockPos, node);
       editor.commands.focus();
     },
+    turnInto: (typeId: string) => {
+      const pos = getPos?.();
+      if (typeof pos !== "number") return;
+      const def = BLOCK_TYPES.find((b) => b.id === typeId);
+      if (!def) return;
+      const tr = editor.state.tr.setSelection(
+        TextSelection.near(editor.state.doc.resolve(pos + 1), 1),
+      );
+      editor.view.dispatch(tr);
+      def.apply(editor);
+    },
   };
 
   return (
@@ -236,9 +259,11 @@ function BlockViewInner(props: NodeViewProps) {
           isFirst={false /* we don't know without the doc, fine for now */}
           anchorRect={menuAnchor}
           canSplitIntoBlocks={countLeafTextblocks(node) > 1}
+          activeBlockTypeId={activeBlockTypeId}
           onClose={() => setMenuAnchor(null)}
           onDelete={showMenuActions.delete}
           onDuplicate={showMenuActions.duplicate}
+          onTurnInto={showMenuActions.turnInto}
           onSplitIntoBlocks={showMenuActions.splitIntoBlocks}
           onSplitAtCursor={showMenuActions.splitAtCursor}
           onMergeUp={() => {

@@ -99,6 +99,44 @@ function buildDocWide(doc: PMNode, state: SearchState, re: RegExp | null): Decor
   return decos.length === 0 ? DecorationSet.empty : DecorationSet.create(doc, decos);
 }
 
+function updateActiveHighlights(
+  doc: PMNode,
+  prev: SearchState,
+  nextActiveId: string | null,
+  re: RegExp,
+): DecorationSet {
+  if (prev.activeId === nextActiveId) return prev.decos;
+
+  let next = prev.decos;
+  const toRemove: Decoration[] = [];
+  const toAdd: Decoration[] = [];
+  const touched = new Set(
+    [prev.activeId, nextActiveId].filter((id): id is string => !!id),
+  );
+
+  doc.forEach((block, offset) => {
+    if (block.type.name !== "mochiBlock") return;
+    const id = block.attrs.id as string | null;
+    if (!id || !touched.has(id)) return;
+
+    const contentStart = offset + 1;
+    const blockEnd = contentStart + block.content.size;
+    const within = next.find(contentStart - 1, blockEnd + 1);
+    for (let i = 0; i < within.length; i++) toRemove.push(within[i]);
+
+    const isActive = id === nextActiveId;
+    const cls = isActive
+      ? `${HIGHLIGHT_CLASS} ${ACTIVE_HIGHLIGHT_CLASS}`
+      : HIGHLIGHT_CLASS;
+    const fresh = decosForBlock(block, contentStart, re, cls);
+    for (let i = 0; i < fresh.length; i++) toAdd.push(fresh[i]);
+  });
+
+  if (toRemove.length > 0) next = next.remove(toRemove);
+  if (toAdd.length > 0) next = next.add(doc, toAdd);
+  return next;
+}
+
 function regexForQuery(query: string): RegExp | null {
   const q = query.trim();
   if (!q) return null;
@@ -135,9 +173,17 @@ export const SearchHighlight = Extension.create({
               | { query: string; activeId: string | null }
               | undefined;
 
-            // External query / activeId update → full rebuild.
+            // Query changes rebuild doc-wide. Active-result changes only
+            // restyle the previous and next active blocks.
             if (meta) {
               const re = regexForQuery(meta.query);
+              if (meta.query === prev.query && re) {
+                return {
+                  query: prev.query,
+                  activeId: meta.activeId,
+                  decos: updateActiveHighlights(tr.doc, prev, meta.activeId, re),
+                };
+              }
               return {
                 query: meta.query,
                 activeId: meta.activeId,

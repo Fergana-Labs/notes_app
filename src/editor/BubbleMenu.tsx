@@ -1,3 +1,4 @@
+import { useEditorState } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import type { Editor } from "@tiptap/core";
 import {
@@ -26,6 +27,34 @@ interface Props {
 // turns into 2k extra NodeView updates per save tick. Hoisting these out
 // of the component body keeps their identity stable.
 const BUBBLE_OPTIONS = { placement: "top" as const, offset: 8 };
+const EMPTY_MENU_STATE = {
+  visible: false,
+  blockTypeId: "paragraph",
+  bold: false,
+  italic: false,
+  underline: false,
+  strike: false,
+  code: false,
+  link: false,
+  href: "",
+};
+
+type MenuState = typeof EMPTY_MENU_STATE;
+
+function menuStateEq(a: MenuState, b: MenuState | null): boolean {
+  return (
+    !!b &&
+    a.visible === b.visible &&
+    a.blockTypeId === b.blockTypeId &&
+    a.bold === b.bold &&
+    a.italic === b.italic &&
+    a.underline === b.underline &&
+    a.strike === b.strike &&
+    a.code === b.code &&
+    a.link === b.link &&
+    a.href === b.href
+  );
+}
 
 const shouldShowBubble = ({
   editor: e,
@@ -49,6 +78,26 @@ const shouldShowBubble = ({
 export function BlockBubbleMenu({ editor }: Props) {
   const [showTurnInto, setShowTurnInto] = useState(false);
   const [showLinkInput, setShowLinkInput] = useState(false);
+  const menuState =
+    useEditorState({
+      editor,
+      selector: ({ editor: e }) => {
+        if (!e || e.state.selection.empty) return EMPTY_MENU_STATE;
+        const linkAttrs = e.getAttributes("link") as any;
+        return {
+          visible: true,
+          blockTypeId: BLOCK_TYPES.find((b) => b.isActive(e))?.id ?? "paragraph",
+          bold: e.isActive("bold"),
+          italic: e.isActive("italic"),
+          underline: e.isActive("underline"),
+          strike: e.isActive("strike"),
+          code: e.isActive("code"),
+          link: e.isActive("link"),
+          href: linkAttrs.href ?? "",
+        };
+      },
+      equalityFn: menuStateEq,
+    }) ?? EMPTY_MENU_STATE;
 
   if (!editor) return null;
 
@@ -62,40 +111,41 @@ export function BlockBubbleMenu({ editor }: Props) {
       <div className="flex items-center gap-0.5 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg p-0.5">
         <TurnIntoButton
           editor={editor}
+          activeTypeId={menuState.blockTypeId}
           open={showTurnInto}
           onOpenChange={setShowTurnInto}
         />
         <Sep />
         <ToolbarBtn
-          active={editor.isActive("bold")}
+          active={menuState.bold}
           onClick={() => editor.chain().focus().toggleBold().run()}
           title="Bold (⌘B)"
         >
           <Bold size={14} />
         </ToolbarBtn>
         <ToolbarBtn
-          active={editor.isActive("italic")}
+          active={menuState.italic}
           onClick={() => editor.chain().focus().toggleItalic().run()}
           title="Italic (⌘I)"
         >
           <Italic size={14} />
         </ToolbarBtn>
         <ToolbarBtn
-          active={editor.isActive("underline")}
+          active={menuState.underline}
           onClick={() => (editor.chain().focus() as any).toggleUnderline().run()}
           title="Underline (⌘U)"
         >
           <Underline size={14} />
         </ToolbarBtn>
         <ToolbarBtn
-          active={editor.isActive("strike")}
+          active={menuState.strike}
           onClick={() => editor.chain().focus().toggleStrike().run()}
           title="Strikethrough"
         >
           <Strikethrough size={14} />
         </ToolbarBtn>
         <ToolbarBtn
-          active={editor.isActive("code")}
+          active={menuState.code}
           onClick={() => editor.chain().focus().toggleCode().run()}
           title="Inline code (⌘E)"
         >
@@ -104,6 +154,8 @@ export function BlockBubbleMenu({ editor }: Props) {
         <Sep />
         <LinkButton
           editor={editor}
+          active={menuState.link}
+          href={menuState.href}
           open={showLinkInput}
           onOpenChange={setShowLinkInput}
         />
@@ -149,15 +201,17 @@ function Sep() {
 
 function TurnIntoButton({
   editor,
+  activeTypeId,
   open,
   onOpenChange,
 }: {
   editor: Editor;
+  activeTypeId: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const current = BLOCK_TYPES.find((b) => b.isActive(editor)) ?? BLOCK_TYPES[0];
+  const current = BLOCK_TYPES.find((b) => b.id === activeTypeId) ?? BLOCK_TYPES[0];
 
   useEffect(() => {
     if (!open) return;
@@ -186,7 +240,7 @@ function TurnIntoButton({
       {open && (
         <div className="absolute top-full left-0 mt-1 w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1 z-50">
           {BLOCK_TYPES.map((b) => {
-            const active = b.isActive(editor);
+            const active = b.id === activeTypeId;
             return (
               <button
                 key={b.id}
@@ -215,10 +269,14 @@ function TurnIntoButton({
 
 function LinkButton({
   editor,
+  active,
+  href,
   open,
   onOpenChange,
 }: {
   editor: Editor;
+  active: boolean;
+  href: string;
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
@@ -226,15 +284,12 @@ function LinkButton({
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
 
-  const existing = (editor.getAttributes("link") as any).href as string | undefined;
-  const isActive = editor.isActive("link");
-
   useEffect(() => {
     if (open) {
-      setValue(existing ?? "");
+      setValue(href);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [open, existing]);
+  }, [open, href]);
 
   useEffect(() => {
     if (!open) return;
@@ -259,7 +314,7 @@ function LinkButton({
   return (
     <div ref={ref} className="relative">
       <ToolbarBtn
-        active={isActive}
+        active={active}
         onClick={() => onOpenChange(!open)}
         title="Link (⌘K)"
       >
@@ -295,7 +350,7 @@ function LinkButton({
           >
             Save
           </button>
-          {isActive && (
+          {active && (
             <button
               type="button"
               onMouseDown={(e) => {

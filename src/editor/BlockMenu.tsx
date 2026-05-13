@@ -20,9 +20,11 @@ interface Props {
   anchorRect: DOMRect | null;
   /** Whether the underlying mochiBlock has more than one block-level child. */
   canSplitIntoBlocks: boolean;
+  activeBlockTypeId: string;
   onClose: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onTurnInto: (typeId: string) => void;
   onMergeUp: () => void;
   onShowHistory: () => void;
   onCopyMarkdown: () => void;
@@ -37,9 +39,11 @@ export function BlockMenu({
   isFirst,
   anchorRect,
   canSplitIntoBlocks,
+  activeBlockTypeId,
   onClose,
   onDelete,
   onDuplicate,
+  onTurnInto,
   onMergeUp,
   onShowHistory,
   onCopyMarkdown,
@@ -128,12 +132,12 @@ export function BlockMenu({
             className="absolute left-full top-0 ml-1 w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl py-1"
           >
             {BLOCK_TYPES.map((b) => {
-              const active = b.isActive(editor);
+              const active = b.id === activeBlockTypeId;
               return (
                 <button
                   key={b.id}
                   onClick={() => {
-                    b.apply(editor);
+                    onTurnInto(b.id);
                     onClose();
                   }}
                   className={`w-full flex items-center gap-2 px-2 py-1 text-left ${

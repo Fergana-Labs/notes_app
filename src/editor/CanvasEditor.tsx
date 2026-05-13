@@ -3,6 +3,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
+import UnderlineExtension from "@tiptap/extension-underline";
 import { Markdown } from "tiptap-markdown";
 import { useWorkspace } from "../stores/workspace";
 import type { StoredBlock } from "../lib/ipc";
@@ -129,6 +130,7 @@ export function CanvasEditor() {
           HTMLAttributes: { class: "mochi-link" },
         },
       }),
+      UnderlineExtension,
       TaskList,
       TaskItem.configure({ nested: true }),
       Markdown.configure({ html: false, linkify: true, breaks: false }),

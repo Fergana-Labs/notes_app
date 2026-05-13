@@ -23,6 +23,7 @@ export default function App() {
   const [mainView, setMainView] = useState<MainView>("canvas");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [highlightQuery, setHighlightQuery] = useState<string>("");
   // Block id the user most recently jumped to from a search result.
   // Drives the "active" variant of the in-editor search highlight.
   const [searchActiveId, setSearchActiveId] = useState<string | null>(null);
@@ -97,15 +98,29 @@ export default function App() {
     };
   }, [path, reload]);
 
-  // Push the current search query + active block into the editor so its
+  // Keep the input itself immediate, but debounce the editor-wide decoration
+  // rebuild. SearchResultsPane already debounces the IPC query; this gives the
+  // same treatment to in-canvas highlighting so typing in the search field
+  // does not synchronously scan a large document per keypress.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setHighlightQuery("");
+      return;
+    }
+    const id = window.setTimeout(() => setHighlightQuery(q), 120);
+    return () => window.clearTimeout(id);
+  }, [searchQuery]);
+
+  // Push the debounced search query + active block into the editor so its
   // SearchHighlight plugin can underline every match in place. Lives ABOVE
   // the splash early-return — hooks must be called unconditionally, in the
   // same order, on every render (React error #310 otherwise).
   useEffect(() => {
     const editor = getCanvasEditor();
     if (!editor) return;
-    setSearchState(editor, searchQuery.trim(), searchActiveId);
-  }, [searchQuery, searchActiveId]);
+    setSearchState(editor, highlightQuery, highlightQuery ? searchActiveId : null);
+  }, [highlightQuery, searchActiveId]);
 
   if (!path) {
     return (
@@ -201,7 +216,10 @@ export default function App() {
         >
           <TopBarSearch
             value={searchQuery}
-            onChange={setSearchQuery}
+            onChange={(q) => {
+              setSearchQuery(q);
+              setSearchActiveId(null);
+            }}
             tagFilter={mainView === "tags" ? tagFilter : null}
           />
         </header>
