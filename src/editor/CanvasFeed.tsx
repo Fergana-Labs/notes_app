@@ -1808,10 +1808,32 @@ function EditableBody({
     // pendingFocus dispatch below when a structural action wants it.
     autofocus: false,
     onUpdate: ({ editor }) => {
+      // Don't fire saves while the user is mid-tag (cursor inside a
+      // `#tag` range). Otherwise a 300ms pause after `#q` lands a
+      // partial `q` tag in blocks.tags.
+      if (cursorInsideHashtag(editor)) {
+        saveDebounced.cancel();
+        return;
+      }
       const md: string = (editor.storage as any).markdown.getMarkdown();
       saveDebounced(md);
     },
-    onBlur: () => {
+    onSelectionUpdate: ({ editor }) => {
+      // Pair to onUpdate above: doc-changes-only would miss the
+      // "user moved cursor out of a tag without typing more"
+      // case (arrow keys, mouse click). When that happens, fire a
+      // save with the current content so deferred typing lands.
+      if (cursorInsideHashtag(editor)) return;
+      const md: string = (editor.storage as any).markdown.getMarkdown();
+      saveDebounced(md);
+    },
+    onBlur: ({ editor }) => {
+      // Blur is the user committing — flush any pending save, AND
+      // force a save with the current content (in case we were
+      // skipping due to cursor-in-tag).
+      saveDebounced.flush();
+      const md: string = (editor.storage as any).markdown.getMarkdown();
+      saveDebounced(md);
       saveDebounced.flush();
     },
   });
@@ -1926,8 +1948,22 @@ function TagChipStrip({
  */
 const HASHTAG_RE_PER_CARD = /(^|\s)(#[A-Za-z][A-Za-z0-9_\-/]*)/g;
 
-function buildHashtagHideDecos(doc: PMNode): DecorationSet {
+/**
+ * Walk the doc and return:
+ *   - decos: the hide-decoration set, EXCLUDING any hashtag the
+ *     cursor is currently inside (so the user can see what they're
+ *     typing while building a tag)
+ *   - cursorInsideHashtag: whether the cursor sits inside a tag
+ *     range — surfaced separately so saveDebounced can skip the
+ *     save and avoid creating a partial `q` tag when the user
+ *     paused mid-word.
+ */
+function buildHashtagHideDecos(
+  doc: PMNode,
+  cursorPos: number,
+): { decos: DecorationSet; cursorInsideHashtag: boolean } {
   const decos: Decoration[] = [];
+  let cursorInside = false;
   doc.descendants((node, pos, parent) => {
     if (!node.isText || !node.text) return;
     if (
@@ -1942,38 +1978,74 @@ function buildHashtagHideDecos(doc: PMNode): DecorationSet {
     while ((m = HASHTAG_RE_PER_CARD.exec(node.text)) !== null) {
       // Cover the leading whitespace (m[1]) AND the tag (m[2]) so the
       // hidden span doesn't leave a phantom space where a read-only
-      // strip would have collapsed it. Without this, "hello #foo world"
-      // renders as "hello  world" (double space) in the editor while
-      // read-only mode renders "hello world".
+      // strip would have collapsed it.
       const wholeStart = pos + m.index;
       const wholeEnd = wholeStart + m[0].length;
+      // Tag-text range (excluding the leading whitespace) is what
+      // counts for "cursor inside this hashtag" — typing inside the
+      // `#xxx` should keep it visible; clicking on the space before
+      // it shouldn't.
+      const tagStart = pos + m.index + m[1].length;
+      if (cursorPos >= tagStart && cursorPos <= wholeEnd) {
+        cursorInside = true;
+        continue; // don't hide an in-progress tag
+      }
       decos.push(Decoration.inline(wholeStart, wholeEnd, { class: "mochi-tag" }));
     }
   });
-  return decos.length > 0 ? DecorationSet.create(doc, decos) : DecorationSet.empty;
+  return {
+    decos: decos.length > 0 ? DecorationSet.create(doc, decos) : DecorationSet.empty,
+    cursorInsideHashtag: cursorInside,
+  };
 }
+
+interface HashtagHideState {
+  decos: DecorationSet;
+  cursorInsideHashtag: boolean;
+}
+
+const hashtagHideKey = new PluginKey<HashtagHideState>("hashtagHidePerCard");
 
 const HashtagHidePerCard = Extension.create({
   name: "hashtagHidePerCard",
   addProseMirrorPlugins() {
-    const key = new PluginKey<DecorationSet>("hashtagHidePerCard");
     return [
-      new Plugin<DecorationSet>({
-        key,
+      new Plugin<HashtagHideState>({
+        key: hashtagHideKey,
         state: {
-          init: (_, state) => buildHashtagHideDecos(state.doc),
-          apply: (tr, prev) =>
-            tr.docChanged ? buildHashtagHideDecos(tr.doc) : prev,
+          init: (_, state) =>
+            buildHashtagHideDecos(state.doc, state.selection.head),
+          apply: (tr, prev, oldState, newState) => {
+            // Re-run on doc changes AND on selection moves — moving
+            // the cursor out of a tag should flip its hide state.
+            if (
+              !tr.docChanged &&
+              oldState.selection.head === newState.selection.head
+            ) {
+              return prev;
+            }
+            return buildHashtagHideDecos(
+              newState.doc,
+              newState.selection.head,
+            );
+          },
         },
         props: {
           decorations(state) {
-            return key.getState(state);
+            return hashtagHideKey.getState(state)?.decos;
           },
         },
       }),
     ];
   },
 });
+
+/** Read the "is the cursor inside a hashtag" flag from the editor's
+ *  HashtagHidePerCard plugin state. */
+function cursorInsideHashtag(editor: Editor): boolean {
+  const s = hashtagHideKey.getState(editor.state);
+  return s?.cursorInsideHashtag ?? false;
+}
 
 /**
  * Per-card search-match highlighter. The old single-doc canvas had a
@@ -2892,10 +2964,24 @@ function ExpandedBlockEditor({
     content: block?.content ?? "",
     autofocus: "end",
     onUpdate: ({ editor }) => {
+      // Same in-progress-tag skip as the inline editor — see comment
+      // there. Prevents partial `#q` from saving as a real `q` tag.
+      if (cursorInsideHashtag(editor)) {
+        saveDebounced.cancel();
+        return;
+      }
       const md: string = (editor.storage as any).markdown.getMarkdown();
       saveDebounced(md);
     },
-    onBlur: () => {
+    onSelectionUpdate: ({ editor }) => {
+      if (cursorInsideHashtag(editor)) return;
+      const md: string = (editor.storage as any).markdown.getMarkdown();
+      saveDebounced(md);
+    },
+    onBlur: ({ editor }) => {
+      saveDebounced.flush();
+      const md: string = (editor.storage as any).markdown.getMarkdown();
+      saveDebounced(md);
       saveDebounced.flush();
     },
   });

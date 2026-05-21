@@ -539,6 +539,49 @@ pub fn save_snapshot(
                 params![b.id, new_hash, b.content, parent_hash, now, source],
             )?;
             changed.push(b.id.clone());
+
+            // Trim version history for this block. Two caps:
+            //   1. 30-day age cap for every block (always preserves at
+            //      least one historical version so the user has SOME
+            //      "undo" target even after a long gap).
+            //   2. Large-block count cap: when the current content is
+            //      over LARGE_BLOCK_BYTES, also keep only the most
+            //      recent LARGE_BLOCK_VERSION_CAP versions — large
+            //      blocks accumulate disk fastest, so they get the
+            //      tighter limit.
+            //
+            // Inline in this transaction so the trim is atomic with
+            // the insert above.
+            const THIRTY_DAYS_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+            const LARGE_BLOCK_BYTES: usize = 2048;
+            const LARGE_BLOCK_VERSION_CAP: i64 = 30;
+
+            tx.execute(
+                "DELETE FROM block_versions
+                 WHERE block_id = ?1
+                   AND edited_at < ?2
+                   AND id NOT IN (
+                     SELECT id FROM block_versions
+                     WHERE block_id = ?1
+                     ORDER BY edited_at DESC
+                     LIMIT 1
+                   )",
+                params![b.id, now - THIRTY_DAYS_MS],
+            )?;
+
+            if b.content.len() > LARGE_BLOCK_BYTES {
+                tx.execute(
+                    "DELETE FROM block_versions
+                     WHERE block_id = ?1
+                       AND id NOT IN (
+                         SELECT id FROM block_versions
+                         WHERE block_id = ?1
+                         ORDER BY edited_at DESC
+                         LIMIT ?2
+                       )",
+                    params![b.id, LARGE_BLOCK_VERSION_CAP],
+                )?;
+            }
         }
     }
 
@@ -549,6 +592,55 @@ pub fn save_snapshot(
 
     tx.commit()?;
     Ok(changed)
+}
+
+/// Trim `block_versions` to bound disk growth. Two passes:
+///   - Drop any version older than 30 days, while always preserving
+///     the most recent version per block (so even after a long gap
+///     the user has SOMETHING to restore to).
+///   - For blocks whose current content exceeds ~2KB, keep at most
+///     the 30 most recent versions. Large blocks accumulate history
+///     bytes fastest, so they get the tighter cap.
+///
+/// Returns the number of rows deleted (for diagnostic logging).
+/// Called on workspace open AND inline in `save_snapshot` per block,
+/// so growth never re-emerges between restarts.
+pub fn prune_block_versions(conn: &Connection) -> Result<usize> {
+    let now = Utc::now().timestamp_millis();
+    const THIRTY_DAYS_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+    const LARGE_BLOCK_BYTES: i64 = 2048;
+    const LARGE_BLOCK_VERSION_CAP: i64 = 30;
+
+    let aged = conn.execute(
+        "DELETE FROM block_versions
+         WHERE edited_at < ?1
+           AND id NOT IN (
+             SELECT MAX(id) FROM block_versions GROUP BY block_id
+           )",
+        params![now - THIRTY_DAYS_MS],
+    )?;
+
+    // For each block whose CURRENT content is large, drop versions
+    // beyond the cap. Counts newer-sibling versions per row — `n` is
+    // the position from latest (0-indexed), so `n >= cap` means this
+    // version is past the cap. Correlated subquery is fine for a
+    // one-shot startup pass.
+    let sized = conn.execute(
+        "DELETE FROM block_versions
+         WHERE id IN (
+           SELECT bv.id FROM block_versions bv
+           JOIN blocks b ON b.id = bv.block_id
+           WHERE length(b.content) > ?1
+             AND (
+               SELECT COUNT(*) FROM block_versions bv2
+               WHERE bv2.block_id = bv.block_id
+                 AND bv2.edited_at > bv.edited_at
+             ) >= ?2
+         )",
+        params![LARGE_BLOCK_BYTES, LARGE_BLOCK_VERSION_CAP],
+    )?;
+
+    Ok(aged + sized)
 }
 
 /// One-shot migration: clear the legacy `manual_tags=1` flag on every block

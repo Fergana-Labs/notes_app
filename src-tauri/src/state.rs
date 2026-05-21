@@ -87,6 +87,13 @@ impl AppState {
             Self::seed_intro(&mut conn)?;
         }
 
+        // Trim historical bloat at startup. Per-save trims keep this
+        // bounded going forward, but workspaces that pre-date the
+        // cap (or that synced from elsewhere) get cleaned up once
+        // per workspace-open. Cheap on a healthy DB; meaningful on a
+        // stale one.
+        let _ = db::prune_block_versions(&conn);
+
         *self.inner.lock() = Some(Workspace { root, db: conn });
         Ok(())
     }
