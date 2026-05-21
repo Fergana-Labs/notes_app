@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { ipc, type BlockInput, type StoredBlock, type TagCount } from "../lib/ipc";
-import { extractInlineTags } from "../lib/markdown";
 
 interface UndoEntry {
   /** Short label for diagnostics (not shown in UI yet). */
@@ -45,16 +44,9 @@ function snapshotBlocks(blocks: StoredBlock[]): BlockInput[] {
     parent_id: b.parent_id,
     heading: b.heading,
     heading_level: b.heading_level,
+    tags: b.tags,
+    pinned: b.pinned,
   }));
-}
-
-function localContentHash(content: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < content.length; i++) {
-    hash ^= content.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `local:${(hash >>> 0).toString(36)}:${content.length}`;
 }
 
 async function refreshAfterOpen(set: any, blocks: StoredBlock[], path: string) {
@@ -120,18 +112,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ blocks, tags });
   },
 
-  saveSnapshot: async (saved, deletedIds = []) => {
-    const res = await ipc.saveBlocks(saved, deletedIds);
+  saveSnapshot: async (input, deletedIds = []) => {
+    const res = await ipc.saveBlocks(input, deletedIds);
 
-    // Patch the in-memory `blocks` array from the input batch instead of
-    // refetching the whole table. For a 2k-block doc this turns every save
-    // from a 2k-row IPC response + array replacement into a few rows
-    // updated in place.
+    // Patch the in-memory `blocks` array from the server's canonical
+    // post-save state. Content may differ from input (server strips
+    // inline `#hashtag` tokens) and `tags` reflects the merged final
+    // set — so we cannot derive these locally.
     set((s) => {
-      if (saved.length === 0 && deletedIds.length === 0) {
+      if (res.saved.length === 0 && deletedIds.length === 0) {
         return { lastMtime: res.mtime };
       }
-      const inputById = new Map(saved.map((b) => [b.id, b]));
+      const inputById = new Map(input.map((b) => [b.id, b]));
+      const savedById = new Map(res.saved.map((b) => [b.id, b]));
       const deletedSet = new Set(deletedIds);
       const now = Date.now();
 
@@ -139,21 +132,20 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const seen = new Set<string>();
       for (const existing of s.blocks) {
         if (deletedSet.has(existing.id)) continue;
-        const input = inputById.get(existing.id);
-        if (input) {
-          const contentChanged = input.content !== existing.content;
+        const inp = inputById.get(existing.id);
+        const sv = savedById.get(existing.id);
+        if (inp && sv) {
           next.push({
             ...existing,
-            content: input.content,
-            content_hash: contentChanged
-              ? localContentHash(input.content)
-              : existing.content_hash,
-            position: input.position,
-            parent_id: input.parent_id ?? null,
-            heading: input.heading ?? null,
-            heading_level: input.heading_level ?? null,
-            tags: extractInlineTags(input.content),
-            updated_at: now,
+            content: sv.content,
+            content_hash: sv.content_hash,
+            position: inp.position,
+            parent_id: inp.parent_id ?? null,
+            heading: inp.heading ?? null,
+            heading_level: inp.heading_level ?? null,
+            tags: sv.tags,
+            pinned: sv.pinned,
+            updated_at: sv.updated_at,
           });
           seen.add(existing.id);
         } else {
@@ -161,30 +153,37 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         }
       }
       // Brand-new blocks (id present in input but not in current state).
-      for (const input of saved) {
-        if (seen.has(input.id)) continue;
+      for (const inp of input) {
+        if (seen.has(inp.id)) continue;
+        const sv = savedById.get(inp.id);
+        if (!sv) continue;
         next.push({
-          id: input.id,
-          parent_id: input.parent_id ?? null,
-          position: input.position,
-          heading: input.heading ?? null,
-          heading_level: input.heading_level ?? null,
-          content: input.content,
-          content_hash: localContentHash(input.content),
-          tags: extractInlineTags(input.content),
-          manual_tags: false,
+          id: inp.id,
+          parent_id: inp.parent_id ?? null,
+          position: inp.position,
+          heading: inp.heading ?? null,
+          heading_level: inp.heading_level ?? null,
+          content: sv.content,
+          content_hash: sv.content_hash,
+          tags: sv.tags,
+          pinned: sv.pinned,
           created_at: now,
-          updated_at: now,
+          updated_at: sv.updated_at,
         });
       }
       next.sort((a, b) => a.position - b.position);
       return { blocks: next, lastMtime: res.mtime };
     });
 
-    // The tags pane reads aggregated counts from the DB. Refresh only when
-    // an actual change happened — pure reorders / no-op saves don't change
-    // the tag counts.
-    if (res.changed_ids.length > 0 || deletedIds.length > 0) {
+    // The tags pane reads aggregated counts from the DB. Refresh only
+    // when the save plausibly changed the tag set — content edits,
+    // explicit tag changes via BlockInput.tags, or deletions can all
+    // shift counts. Pure-position reorders cannot.
+    const tagSetMaybeChanged =
+      input.some((b) => b.tags !== undefined) ||
+      deletedIds.length > 0 ||
+      res.saved.length > 0;
+    if (tagSetMaybeChanged) {
       const tags = await ipc.listTags();
       set({ tags });
     }

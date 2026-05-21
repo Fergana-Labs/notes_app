@@ -87,6 +87,13 @@ impl AppState {
             Self::seed_intro(&mut conn)?;
         }
 
+        // Trim historical bloat at startup. Per-save trims keep this
+        // bounded going forward, but workspaces that pre-date the
+        // cap (or that synced from elsewhere) get cleaned up once
+        // per workspace-open. Cheap on a healthy DB; meaningful on a
+        // stale one.
+        let _ = db::prune_block_versions(&conn);
+
         *self.inner.lock() = Some(Workspace { root, db: conn });
         Ok(())
     }
@@ -128,6 +135,8 @@ impl AppState {
                         parent_id: b.parent_id,
                         heading: b.heading,
                         heading_level: b.heading_level,
+                        tags: None,
+                        pinned: None,
                     })
                     .collect();
                 if !inputs.is_empty() {
@@ -139,11 +148,27 @@ impl AppState {
             }
         }
 
-        // v2 → v3: tags are now always inline-derived. Heal any rows still
-        // carrying the legacy `manual_tags=1` flag by resetting the flag
-        // and re-extracting tags from each row's content.
-        if current < 3 {
-            db::heal_manual_tags(conn)?;
+        // v2 → v3 and v3 → v4 are folded into v4 → v5 (which rebuilds
+        // the blocks table anyway). If a workspace skipped intermediate
+        // versions, the v5 migration handles their concerns too:
+        // tag_metadata.folder is read (if present) when copying into
+        // the new `tags` table; legacy `manual_tags=1` rows have their
+        // tag set rebuilt from content as part of the strip pass.
+
+        // v4 → v5: normalize tags into `tags` + `block_tags` tables,
+        // strip inline `#hashtag` text from every block's content,
+        // add the `pinned` column, drop the legacy JSON column +
+        // `manual_tags` + `tag_metadata`.
+        //
+        // Force a backup first — this rewrites every block's content
+        // and tag storage. Recovery path for any user with existing
+        // data.
+        if current < 5 {
+            // Best-effort backup. If it fails (disk full, permission)
+            // we still continue — the WAL + a clean rollback gives us
+            // some safety, and forcing a hard stop would brick users.
+            let _ = db::backup(conn, root);
+            db::heal_strip_inline_tags(conn)?;
         }
 
         db::set_setting(
@@ -178,6 +203,8 @@ impl AppState {
                 parent_id,
                 heading,
                 heading_level: *heading_level,
+                tags: None,
+                pinned: None,
             });
         }
         db::save_snapshot(conn, &blocks, &[], "seed")?;

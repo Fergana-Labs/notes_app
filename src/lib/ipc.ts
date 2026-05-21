@@ -8,8 +8,12 @@ export interface StoredBlock {
   heading_level: number | null;
   content: string;
   content_hash: string;
+  /** Tags carried by this block, lowercased. Read-time projection
+   *  from the normalized `tags` + `block_tags` tables; not stored on
+   *  the block row itself. */
   tags: string[];
-  manual_tags: boolean;
+  /** Whether the user has pinned this block to the top of the feed. */
+  pinned: boolean;
   created_at: number;
   updated_at: number;
 }
@@ -27,6 +31,19 @@ export interface BlockVersion {
 export interface TagCount {
   tag: string;
   count: number;
+  description: string;
+  /** Explicit sort_order from tag_metadata (1-indexed). Null when the tag
+   *  has never been reordered/described — those tags fall back to
+   *  count-descending order at the end of the list. */
+  sort_order: number | null;
+  /** Folder name this tag is organized under in the sidebar, or null
+   *  for root. Folders are visual-only — they never appear in the
+   *  tag's name or in block content. */
+  folder: string | null;
+}
+
+export interface DeleteTagResult {
+  affected_block_ids: string[];
 }
 
 export interface SearchHit {
@@ -62,10 +79,30 @@ export interface BlockInput {
   parent_id?: string | null;
   heading?: string | null;
   heading_level?: number | null;
+  /** Explicit tag set for this block. When present, it's merged with
+   *  inline hashtags extracted from `content` to form the final tag
+   *  set. When absent, the prior tag set is preserved (purely
+   *  structural saves don't touch tags). */
+  tags?: string[];
+  /** Pin state. When absent, the prior pin state is preserved. */
+  pinned?: boolean;
+}
+
+/** Canonical post-save state for a single block, returned from
+ *  `save_blocks`. The frontend patches its store from these — content
+ *  may differ from input (hashtags stripped) and `tags` reflects the
+ *  merged final set. */
+export interface SavedBlock {
+  id: string;
+  content: string;
+  content_hash: string;
+  tags: string[];
+  pinned: boolean;
+  updated_at: number;
 }
 
 export interface SaveResult {
-  changed_ids: string[];
+  saved: SavedBlock[];
   mtime: number;
 }
 
@@ -86,8 +123,19 @@ export const ipc = {
   listBlocksByTag: (tag: string) =>
     invoke<StoredBlock[]>("list_blocks_by_tag", { tag }),
   listTags: () => invoke<TagCount[]>("list_tags"),
-  search: (query: string, limit = 50) =>
-    invoke<SearchHit[]>("search", { query, limit }),
+  setTagDescription: (name: string, description: string) =>
+    invoke<void>("set_tag_description", { name, description }),
+  reorderTags: (names: string[]) => invoke<void>("reorder_tags", { names }),
+  setTagFolder: (name: string, folder: string | null) =>
+    invoke<void>("set_tag_folder", { name, folder }),
+  deleteTag: (name: string, mode: "strip" | "delete_blocks") =>
+    invoke<DeleteTagResult>("delete_tag", { name, mode }),
+  search: (query: string, limit = 50, caseSensitive = false) =>
+    invoke<SearchHit[]>("search", {
+      query,
+      limit,
+      caseSensitive,
+    }),
   saveBlocks: (
     blocks: BlockInput[],
     deletedIds: string[] = [],

@@ -226,6 +226,162 @@ html, body, #root {
   margin-bottom: 6px;
 }
 
+/* Each mochiBlock renders as a self-contained card — tweet-style — while
+   keeping the in-block ProseMirror editing intact. Drag/slash menu/section
+   headings all continue to work; only the visual treatment changes. */
+.mochi-block-card {
+  border: 1px solid var(--color-neutral-200);
+  border-radius: 14px;
+  background: white;
+  margin-bottom: 10px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.mochi-block-card:hover {
+  border-color: var(--color-neutral-300);
+}
+
+@media (prefers-color-scheme: dark) {
+  .mochi-block-card {
+    background: var(--color-neutral-900);
+    border-color: var(--color-neutral-800);
+  }
+  .mochi-block-card:hover {
+    border-color: var(--color-neutral-700);
+  }
+}
+
+/* Defensive: hidden tippy popups should not paint. Even with
+   `duration: 0`, tippy sets data-state="hidden" before unmount —
+   without this rule the popup can flash for a frame. */
+.tippy-box[data-state="hidden"] {
+  display: none !important;
+}
+
+/* In-card search-match decorations (added by SearchHighlightPerCard).
+   Mild amber for matches; stronger amber for the "active" hit jumped to
+   from the sidebar's SearchResultsPane. */
+.mochi-block-card .ProseMirror .mochi-search-match,
+.mochi-expanded-editor .ProseMirror .mochi-search-match {
+  background: oklch(0.94 0.08 80);
+  border-radius: 2px;
+}
+.mochi-block-card .ProseMirror .mochi-search-match-active,
+.mochi-expanded-editor .ProseMirror .mochi-search-match-active {
+  background: oklch(0.84 0.16 80);
+  color: black;
+  border-radius: 2px;
+}
+@media (prefers-color-scheme: dark) {
+  .mochi-block-card .ProseMirror .mochi-search-match,
+  .mochi-expanded-editor .ProseMirror .mochi-search-match {
+    background: oklch(0.4 0.08 80);
+  }
+  .mochi-block-card .ProseMirror .mochi-search-match-active,
+  .mochi-expanded-editor .ProseMirror .mochi-search-match-active {
+    background: oklch(0.65 0.16 80);
+    color: black;
+  }
+}
+
+/* Inside a feed card OR the full-page expanded editor, the inline
+   `#tag` decoration from HashtagHidePerCard is suppressed visually —
+   tags live in the chip strip / header so they shouldn't also appear
+   in the body. The text is still in the doc, so the editor saves it
+   correctly; we just hide the rendered span. */
+.mochi-block-card .ProseMirror .mochi-tag,
+.mochi-expanded-editor .ProseMirror .mochi-tag {
+  display: none;
+}
+
+/* Read-only markdown cards need the same heading scale as the editor
+   side, otherwise a card switches from "big header" while editing to
+   "plain text" when you click away. Tailwind's preflight resets all
+   headings to inherit, so without this `<h1>` rendered by markdown-it
+   appears identical to a paragraph. Numbers mirror `.ProseMirror h*`
+   above. */
+.prose-block h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  margin: 0.4rem 0 0.2rem;
+  line-height: 1.2;
+}
+.prose-block h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0.35rem 0 0.15rem;
+  line-height: 1.25;
+}
+.prose-block h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0.3rem 0 0.1rem;
+  line-height: 1.3;
+}
+.prose-block h4,
+.prose-block h5,
+.prose-block h6 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0.25rem 0;
+}
+.prose-block p {
+  margin: 0;
+}
+.prose-block ul,
+.prose-block ol {
+  padding-left: 1.4rem;
+  margin: 0.15rem 0;
+}
+.prose-block ul {
+  list-style: disc;
+}
+.prose-block ol {
+  list-style: decimal;
+}
+.prose-block code {
+  background: var(--color-neutral-100);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+}
+@media (prefers-color-scheme: dark) {
+  .prose-block code {
+    background: var(--color-neutral-800);
+  }
+}
+.prose-block pre {
+  background: var(--color-neutral-100);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
+@media (prefers-color-scheme: dark) {
+  .prose-block pre {
+    background: var(--color-neutral-900);
+  }
+}
+.prose-block blockquote {
+  border-left: 3px solid var(--color-neutral-300);
+  padding-left: 0.75rem;
+  color: var(--color-neutral-600);
+}
+@media (prefers-color-scheme: dark) {
+  .prose-block blockquote {
+    border-left-color: var(--color-neutral-700);
+    color: var(--color-neutral-400);
+  }
+}
+
+/* The body wrapper sits flush under the avatar row — kill the default
+   first-child top margin from Tiptap's paragraph/heading nodes so the
+   tweet header + body line up tightly. */
+.mochi-block-body > .ProseMirror-trailingBreak ~ *,
+.mochi-block-body > :first-child {
+  margin-top: 0;
+}
+
 /* fade the source block while it's being dragged */
 .mochi-block-dragging {
   opacity: 0.35;
@@ -294,5 +450,140 @@ mark { background: oklch(0.95 0.1 100); padding: 0 2px; border-radius: 2px; }
   .mochi-search-hit-active {
     background: oklch(0.65 0.2 60);
     color: black;
+  }
+}
+
+/* ============================================================
+ * Colorful mode — sage-green palette borrowed from stash_desktop.
+ * Activated by `.colorful` on <html> (toggled in App.tsx).
+ *
+ * Strategy: instead of editing 40+ tag/highlight call sites, we
+ * re-map every blue-* Tailwind utility actually used in the app
+ * to a stash-derived sage equivalent. Sidebar surface itself is
+ * set directly in Sidebar.tsx (Tailwind arbitrary value); the
+ * white-on-green text inside is handled below.
+ *
+ * Source palette (stash_desktop/electron/src/renderer/index.css):
+ *   --sidebar:               #557153
+ *   --sidebar-border:        #4a6741
+ *   --sidebar-foreground:    #ffffff
+ *   --sidebar-foreground-mu: #b3c4b1
+ *   --primary:               #87a970
+ *   --primary-hover:         #7a9c64
+ *   --primary-active:        #6d8f58
+ *   --secondary:             #557153
+ *   --secondary-hover:       #4a6448
+ *   --secondary-active:      #3f573d
+ * ============================================================ */
+
+/* Sidebar inner text — the colored chrome means neutral grays need
+ * to flip to white / pale sage for legibility. */
+.colorful aside {
+  color: #ffffff;
+}
+.colorful aside .text-neutral-400,
+.colorful aside .text-neutral-500,
+.colorful aside .text-neutral-600 {
+  color: #b3c4b1;
+}
+.colorful aside .text-neutral-700,
+.colorful aside .text-neutral-800,
+.colorful aside .text-neutral-900,
+.colorful aside .dark\:text-neutral-100,
+.colorful aside .dark\:text-neutral-200,
+.colorful aside .dark\:text-neutral-300,
+.colorful aside .dark\:text-neutral-400 {
+  color: #ffffff;
+}
+.colorful aside .border-neutral-100,
+.colorful aside .border-neutral-200,
+.colorful aside .dark\:border-neutral-700,
+.colorful aside .dark\:border-neutral-800 {
+  border-color: #4a6741;
+}
+.colorful aside .hover\:bg-neutral-50:hover,
+.colorful aside .hover\:bg-neutral-100:hover,
+.colorful aside .dark\:hover\:bg-neutral-800:hover,
+.colorful aside .dark\:hover\:bg-neutral-800\/50:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.colorful aside .bg-neutral-100,
+.colorful aside .dark\:bg-neutral-800 {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Map every blue-* utility used in the app to a sage equivalent.
+ * Each rule is scoped under `.colorful` so it only fires when the
+ * setting is on. Dark-variant overrides live inside their own
+ * `@media (prefers-color-scheme: dark)` block at the bottom. */
+.colorful .bg-blue-50            { background-color: #eaf0e3; }
+.colorful .bg-blue-100           { background-color: #dde6d2; }
+.colorful .bg-blue-500           { background-color: #87a970; }
+.colorful .bg-blue-600           { background-color: #557153; }
+.colorful .hover\:bg-blue-50:hover   { background-color: #dde6d2; }
+.colorful .hover\:bg-blue-700:hover  { background-color: #4a6448; }
+.colorful .active\:bg-blue-800:active { background-color: #3f573d; }
+
+.colorful .text-blue-400         { color: #95b57e; }
+.colorful .text-blue-400\/60     { color: rgba(149, 181, 126, 0.6); }
+.colorful .text-blue-500         { color: #87a970; }
+.colorful .text-blue-600         { color: #6d8f58; }
+.colorful .text-blue-700         { color: #557153; }
+.colorful .text-blue-800         { color: #4a6448; }
+.colorful .text-blue-900         { color: #3f573d; }
+.colorful .hover\:text-blue-700:hover { color: #557153; }
+.colorful .hover\:text-blue-900:hover { color: #3f573d; }
+
+.colorful .border-blue-300       { border-color: #b3c4b1; }
+.colorful .border-blue-400       { border-color: #95b57e; }
+.colorful .border-blue-600       { border-color: #557153; }
+
+.colorful .ring-blue-200         { --tw-ring-color: #c5d4b6; }
+.colorful .ring-blue-300         { --tw-ring-color: #b3c4b1; }
+.colorful .ring-blue-600         { --tw-ring-color: #557153; }
+.colorful .ring-blue-800         { --tw-ring-color: #3f573d; }
+
+@media (prefers-color-scheme: dark) {
+  .colorful .dark\:bg-blue-900\/20  { background-color: rgba(85, 113, 83, 0.20); }
+  .colorful .dark\:bg-blue-900\/30  { background-color: rgba(85, 113, 83, 0.30); }
+  .colorful .dark\:bg-blue-900\/40  { background-color: rgba(85, 113, 83, 0.40); }
+  .colorful .dark\:hover\:bg-blue-900\/30:hover { background-color: rgba(85, 113, 83, 0.30); }
+
+  .colorful .dark\:text-blue-100   { color: #d3dfca; }
+  .colorful .dark\:text-blue-200   { color: #c5d4b6; }
+  .colorful .dark\:text-blue-300   { color: #a3c18c; }
+  .colorful .dark\:text-blue-400   { color: #95b57e; }
+  .colorful .dark\:hover\:text-blue-100:hover { color: #d3dfca; }
+  .colorful .dark\:hover\:text-blue-200:hover { color: #c5d4b6; }
+
+  .colorful .dark\:border-blue-600 { border-color: #557153; }
+  .colorful .dark\:border-blue-700 { border-color: #4a6448; }
+}
+
+/* Canvas / Newest / Oldest sort selector: re-tint the active segment
+ * to deep sage in colorful mode (instead of high-contrast neutral). */
+.colorful .mochi-sort-toggle {
+  border-color: #b3c4b1;
+}
+.colorful .mochi-sort-toggle .bg-neutral-900 {
+  background-color: #557153;
+  color: #ffffff;
+}
+.colorful .mochi-sort-toggle .text-neutral-500 {
+  color: #6d8f58;
+}
+.colorful .mochi-sort-toggle .hover\:bg-neutral-100:hover {
+  background-color: #eaf0e3;
+}
+@media (prefers-color-scheme: dark) {
+  .colorful .mochi-sort-toggle {
+    border-color: #4a6741;
+  }
+  .colorful .mochi-sort-toggle .dark\:bg-neutral-100 {
+    background-color: #87a970;
+    color: #1f2419;
+  }
+  .colorful .mochi-sort-toggle .dark\:hover\:bg-neutral-800:hover {
+    background-color: rgba(135, 169, 112, 0.18);
   }
 }

@@ -44,6 +44,91 @@ pub fn extract_hashtags(content: &str) -> Vec<String> {
     tags
 }
 
+/// Strip every inline `#hashtag` token from `content`, skipping fenced
+/// code blocks and tag-like fragments inside URLs. Mirrors the
+/// `extract_hashtags` recognizer (same `(?:^|\s)#[A-Za-z][...]*` shape)
+/// so a strip-then-extract round trip is idempotent and consistent.
+///
+/// Whitespace cleanup: removes the matched `#tag` (preserving the
+/// leading whitespace/start-of-line that the recognizer requires),
+/// collapses any resulting double spaces, trims trailing line spaces,
+/// and squashes runs of blank lines that were created when a tag was
+/// the only content on a line.
+pub fn strip_inline_hashtags(content: &str) -> String {
+    static MULTI_SPACE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"[ \t]{2,}").unwrap());
+    static TRAILING_WS: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"[ \t]+$").unwrap());
+    static TRIPLE_NEWLINE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
+
+    let mut in_code = false;
+    let mut out_lines: Vec<String> = Vec::new();
+    for line in content.split('\n') {
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            out_lines.push(line.to_string());
+            continue;
+        }
+        if in_code {
+            out_lines.push(line.to_string());
+            continue;
+        }
+        let url_ranges: Vec<(usize, usize)> =
+            URL.find_iter(line).map(|m| (m.start(), m.end())).collect();
+        let stripped = strip_line(line, &url_ranges);
+        let collapsed = MULTI_SPACE.replace_all(&stripped, " ").to_string();
+        let trimmed = TRAILING_WS.replace_all(&collapsed, "").to_string();
+        out_lines.push(trimmed);
+    }
+    let joined = out_lines.join("\n");
+    TRIPLE_NEWLINE
+        .replace_all(&joined, "\n\n")
+        .trim_matches('\n')
+        .to_string()
+}
+
+/// Strip `#tag` tokens from a single line, leaving byte ranges that
+/// fall inside `url_ranges` untouched. The recognizer's leading
+/// boundary (group 1: start-of-line or whitespace) is preserved so
+/// word separation isn't lost. When a tag matches at start-of-line,
+/// any trailing space immediately after the tag is consumed too, so
+/// `#tag hello` collapses cleanly to `hello`.
+fn strip_line(line: &str, url_ranges: &[(usize, usize)]) -> String {
+    static STRIP: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+        Regex::new(r"(^|\s)#[A-Za-z][A-Za-z0-9_\-/]*").unwrap()
+    });
+    let mut out = String::with_capacity(line.len());
+    let mut last = 0usize;
+    for m in STRIP.find_iter(line) {
+        let inside_url = url_ranges
+            .iter()
+            .any(|(us, ue)| m.start() < *ue && m.end() > *us);
+        if inside_url {
+            continue;
+        }
+        out.push_str(&line[last..m.start()]);
+        let matched = &line[m.start()..m.end()];
+        let first_char = matched.chars().next();
+        let leading_is_ws = matches!(first_char, Some(c) if c.is_whitespace());
+        if leading_is_ws {
+            out.push(first_char.unwrap());
+        }
+        let mut end = m.end();
+        // Start-of-line strip: also consume the trailing space so we
+        // don't leave a phantom leading space on the rewritten line.
+        if !leading_is_ws {
+            let tail = &line[end..];
+            if tail.starts_with(' ') || tail.starts_with('\t') {
+                end += 1;
+            }
+        }
+        last = end;
+    }
+    out.push_str(&line[last..]);
+    out
+}
+
 pub mod migration {
     //! Legacy `canvas.md` parser. Only used by the one-shot import that
     //! runs when a workspace is opened with `schema_version < 2`.
@@ -210,6 +295,42 @@ mod tests {
         let tags = extract_hashtags("https://example.com/#frag and #real");
         assert!(tags.contains(&"real".to_string()));
         assert!(!tags.iter().any(|t| t == "frag"));
+    }
+
+    #[test]
+    fn strips_leading_middle_trailing_tags() {
+        assert_eq!(strip_inline_hashtags("#a hello"), "hello");
+        assert_eq!(strip_inline_hashtags("hello #middle world"), "hello world");
+        assert_eq!(strip_inline_hashtags("hello #trailing"), "hello");
+    }
+
+    #[test]
+    fn strip_keeps_fenced_code_tags() {
+        let md = "before #yes\n```\n#kept\n```\nafter #also";
+        let out = strip_inline_hashtags(md);
+        assert_eq!(out, "before\n```\n#kept\n```\nafter");
+    }
+
+    #[test]
+    fn strip_preserves_url_fragments() {
+        let out = strip_inline_hashtags("see https://example.com/#frag for #real info");
+        assert_eq!(out, "see https://example.com/#frag for info");
+    }
+
+    #[test]
+    fn strip_squashes_blank_lines_when_tag_only_line() {
+        let out = strip_inline_hashtags("line one\n#sololine\nline two");
+        assert_eq!(out, "line one\n\nline two");
+    }
+
+    #[test]
+    fn strip_is_idempotent_with_extract() {
+        let src = "first #a then #b and #c";
+        let stripped = strip_inline_hashtags(src);
+        // Second pass should be a no-op.
+        assert_eq!(strip_inline_hashtags(&stripped), stripped);
+        // And extraction on the stripped form should yield no tags.
+        assert!(extract_hashtags(&stripped).is_empty());
     }
 
     #[test]

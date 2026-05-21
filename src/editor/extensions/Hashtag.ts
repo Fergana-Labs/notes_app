@@ -1,122 +1,27 @@
 import { Extension } from "@tiptap/core";
-import { PluginKey } from "@tiptap/pm/state";
-import Suggestion, { type SuggestionProps } from "@tiptap/suggestion";
-import { ReactRenderer } from "@tiptap/react";
-import tippy, { type Instance } from "tippy.js";
-import { HashtagList, type HashtagListItem, type HashtagListHandle } from "../HashtagList";
-
-const hashtagPluginKey = new PluginKey("mochiHashtag");
 
 export interface HashtagOptions {
+  /** Kept for backwards compatibility with existing call sites. */
   getTags: () => string[];
 }
 
-function sanitize(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9_\-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
+/**
+ * Tag recognition lives at save-time (workspace.saveSnapshot extracts
+ * inline `#tag` patterns via `extractInlineTags`), so this extension
+ * doesn't actually need to do anything in the editor. The old version
+ * used `@tiptap/suggestion` + `tippy.js` to show an autocomplete picker
+ * when the user typed `#`, but that popup kept flashing in unwanted
+ * places (mount-time when the cursor landed inside an existing
+ * `#tag`, frame-after-commit even with synchronous destroy). The
+ * chip-strip `TagAdder` already provides explicit tag-add UX with
+ * its own dropdown, so the inline picker was redundant.
+ *
+ * Kept as a no-op extension to avoid changing every call site that
+ * still passes `Hashtag.configure({ getTags })`.
+ */
 export const Hashtag = Extension.create<HashtagOptions>({
   name: "hashtag",
-
   addOptions() {
     return { getTags: () => [] };
-  },
-
-  addProseMirrorPlugins() {
-    const options = this.options;
-    return [
-      Suggestion<HashtagListItem>({
-        editor: this.editor,
-        pluginKey: hashtagPluginKey,
-        char: "#",
-        startOfLine: false,
-        allowSpaces: false,
-        items: ({ query }: { query: string }) => {
-          const all = options.getTags();
-          const lower = query.toLowerCase();
-          const matched: HashtagListItem[] = all
-            .filter((t) => t.toLowerCase().includes(lower))
-            .sort((a, b) => {
-              const ai = a.toLowerCase().startsWith(lower) ? 0 : 1;
-              const bi = b.toLowerCase().startsWith(lower) ? 0 : 1;
-              return ai - bi || a.localeCompare(b);
-            })
-            .slice(0, 8)
-            .map((t) => ({ tag: t }));
-          const cleaned = sanitize(query);
-          if (cleaned && !matched.some((m) => m.tag === cleaned)) {
-            matched.push({ tag: cleaned, isNew: true });
-          }
-          return matched;
-        },
-        command: ({ editor, range, props }) => {
-          editor
-            .chain()
-            .focus()
-            .insertContentAt(
-              { from: range.from, to: range.to },
-              `#${props.tag} `,
-            )
-            .run();
-        },
-        render: () => {
-          let component: ReactRenderer<HashtagListHandle> | null = null;
-          let popup: Instance[] | null = null;
-
-          return {
-            onStart: (props: SuggestionProps<HashtagListItem>) => {
-              component = new ReactRenderer(HashtagList, {
-                props,
-                editor: props.editor,
-              });
-              if (!props.clientRect) return;
-              popup = tippy("body", {
-                getReferenceClientRect: () => {
-                  const r = props.clientRect?.();
-                  return r ?? new DOMRect();
-                },
-                appendTo: () => document.body,
-                content: component.element,
-                showOnCreate: true,
-                interactive: true,
-                trigger: "manual",
-                placement: "bottom-start",
-                offset: [0, 4],
-                arrow: false,
-                theme: "light-border",
-              });
-            },
-            onUpdate: (props: SuggestionProps<HashtagListItem>) => {
-              component?.updateProps(props);
-              if (popup && props.clientRect) {
-                popup[0]?.setProps({
-                  getReferenceClientRect: () => {
-                    const r = props.clientRect?.();
-                    return r ?? new DOMRect();
-                  },
-                });
-              }
-            },
-            onKeyDown: (props) => {
-              if (props.event.key === "Escape") {
-                popup?.[0]?.hide();
-                return true;
-              }
-              return component?.ref?.onKeyDown(props as any) ?? false;
-            },
-            onExit: () => {
-              popup?.[0]?.destroy();
-              popup = null;
-              component?.destroy();
-              component = null;
-            },
-          };
-        },
-      }),
-    ];
   },
 });

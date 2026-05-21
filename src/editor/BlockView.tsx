@@ -56,18 +56,11 @@ function BlockViewInner(props: NodeViewProps) {
     }
   })();
 
-  // Match the gutter's icon center with the first text line for any block type.
-  const gutterPt = (() => {
-    switch (headingLevel) {
-      case 1: return 14;
-      case 2: return 11;
-      case 3: return 8;
-      case 4:
-      case 5:
-      case 6: return 4;
-      default: return 2;
-    }
-  })();
+  // Header chrome lives at the top of the card, so the gutter sits flush
+  // with the avatar row — no per-heading offset needed.
+  const handle = (node.attrs.id ?? "").slice(-6).toLowerCase() || "block";
+  const avatarColor = avatarColorFromId(node.attrs.id ?? "");
+  const avatarInitial = handle.slice(0, 1).toUpperCase();
 
   const insertBlockBelow = () => {
     const pos = getPos?.();
@@ -103,7 +96,7 @@ function BlockViewInner(props: NodeViewProps) {
     content: "",
     content_hash: "",
     tags: Array.isArray(node.attrs.tags) ? node.attrs.tags : [],
-    manual_tags: !!node.attrs.manualTags,
+    pinned: false,
     created_at: 0,
     updated_at: 0,
   };
@@ -218,16 +211,38 @@ function BlockViewInner(props: NodeViewProps) {
 
   return (
     <NodeViewWrapper
-      className="mochi-block-row group relative"
+      className="mochi-block-row mochi-block-card group relative"
       data-block-id={node.attrs.id}
+      data-heading-level={headingLevel ?? undefined}
       onContextMenu={onContextMenu}
     >
-      <div className="flex items-start py-0.5 rounded-md transition-colors">
+      <div
+        contentEditable={false}
+        className="mochi-block-header flex items-center gap-2 px-4 pt-3 select-none"
+      >
         <div
-          contentEditable={false}
-          className="w-12 shrink-0 flex items-start justify-end gap-0 pr-1 opacity-0 group-hover:opacity-100 select-none"
-          style={{ paddingTop: gutterPt }}
+          className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-semibold"
+          style={{ background: avatarColor }}
+          aria-hidden
         >
+          {avatarInitial}
+        </div>
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 text-xs text-neutral-500">
+          <span className="font-mono truncate">@{handle}</span>
+          {Array.isArray(node.attrs.tags) && node.attrs.tags.length > 0 && (
+            <span className="flex items-center gap-1 flex-wrap">
+              {(node.attrs.tags as string[]).slice(0, 4).map((t) => (
+                <span
+                  key={t}
+                  className="px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                >
+                  #{t}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
           <button
             type="button"
             onClick={insertBlockBelow}
@@ -246,10 +261,10 @@ function BlockViewInner(props: NodeViewProps) {
             <GripVertical size={14} />
           </button>
         </div>
+      </div>
 
-        <div className="flex-1 min-w-0 pr-1">
-          <NodeViewContent />
-        </div>
+      <div className="mochi-block-body px-4 pt-1 pb-3 min-w-0">
+        <NodeViewContent />
       </div>
 
       {menuAnchor && (
@@ -288,6 +303,15 @@ function BlockViewInner(props: NodeViewProps) {
       )}
     </NodeViewWrapper>
   );
+}
+
+// Stable color from the block's ULID — same hue every render, same hue
+// across sessions. Pure: never re-fires React.
+function avatarColorFromId(id: string): string {
+  if (!id) return "hsl(0deg 0% 60%)";
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360}deg 55% 50%)`;
 }
 
 export const BlockView = memo(BlockViewInner, (prev, next) => {

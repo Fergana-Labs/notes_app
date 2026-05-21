@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { X, FolderOpen, Database } from "lucide-react";
+import { X, FolderOpen, Database, Palette } from "lucide-react";
 import { WorkspaceTab } from "./WorkspaceTab";
 import { BackupsTab } from "./BackupsTab";
+import { AppearanceTab } from "./AppearanceTab";
 
-type Tab = "workspace" | "backups";
+type Tab = "workspace" | "appearance" | "backups";
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("workspace");
@@ -35,6 +36,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               label="Workspace"
             />
             <NavItem
+              active={tab === "appearance"}
+              onClick={() => setTab("appearance")}
+              icon={<Palette size={14} />}
+              label="Appearance"
+            />
+            <NavItem
               active={tab === "backups"}
               onClick={() => setTab("backups")}
               icon={<Database size={14} />}
@@ -43,6 +50,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </nav>
           <div className="flex-1 overflow-y-auto p-4">
             {tab === "workspace" && <WorkspaceTab />}
+            {tab === "appearance" && <AppearanceTab />}
             {tab === "backups" && <BackupsTab />}
           </div>
         </div>
