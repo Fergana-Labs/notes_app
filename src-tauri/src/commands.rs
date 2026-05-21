@@ -138,12 +138,62 @@ pub fn list_tags(state: State<'_, AppState>) -> Result<Vec<TagCount>> {
 }
 
 #[tauri::command]
+pub fn set_tag_description(
+    name: String,
+    description: String,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.with(|ws| db::set_tag_description(&ws.db, &name, &description))
+}
+
+#[tauri::command]
+pub fn reorder_tags(names: Vec<String>, state: State<'_, AppState>) -> Result<()> {
+    state.with(|ws| db::reorder_tags(&mut ws.db, &names))
+}
+
+#[tauri::command]
+pub fn set_tag_folder(
+    name: String,
+    folder: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.with(|ws| db::set_tag_folder(&ws.db, &name, folder.as_deref()))
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteTagResult {
+    pub affected_block_ids: Vec<String>,
+}
+
+#[tauri::command]
+pub fn delete_tag(
+    name: String,
+    mode: String,
+    state: State<'_, AppState>,
+) -> Result<DeleteTagResult> {
+    state.with(|ws| {
+        let ids = db::delete_tag(&mut ws.db, &name, &mode)?;
+        Ok(DeleteTagResult {
+            affected_block_ids: ids,
+        })
+    })
+}
+
+#[tauri::command]
 pub fn search(
     query: String,
     limit: Option<i64>,
+    case_sensitive: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SearchHit>> {
-    state.with(|ws| db::search(&ws.db, &query, limit.unwrap_or(50)))
+    state.with(|ws| {
+        db::search(
+            &ws.db,
+            &query,
+            limit.unwrap_or(50),
+            case_sensitive.unwrap_or(false),
+        )
+    })
 }
 
 #[derive(Debug, Deserialize)]

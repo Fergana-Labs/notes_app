@@ -3,31 +3,55 @@ import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Markdown } from "tiptap-markdown";
 import { useEffect, useRef, useState } from "react";
+import { ulid } from "ulid";
 import { Send, ArrowUpToLine, ArrowDownToLine, ChevronDown } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
 import { useChatSettings } from "../stores/chatSettings";
-import { getCanvasEditor } from "./editorRef";
 import { Hashtag } from "./extensions/Hashtag";
 import { HashtagHighlight } from "./extensions/HashtagHighlight";
-import { jsonFromBlocks } from "../lib/markdown";
-import type { StoredBlock } from "../lib/ipc";
+import { unescapeInlineHashtags } from "../lib/markdown";
+
+interface Props {
+  /** Currently-active tag filter (from App.tsx). When set, new blocks
+   *  are pre-seeded with `#tag` so they immediately appear in the
+   *  filtered view. */
+  tagFilter?: string | null;
+}
 
 /**
  * Chat-style capture bar pinned to the bottom of the canvas.
- *  - Enter           → submit (insert as new block at top / bottom of canvas).
- *  - Shift+Enter     → new paragraph (true paragraph split, not a `<br>` —
- *                      avoids cursor flicker through hard-break runs).
+ *  - Enter           → submit (insert as a new block at top / bottom).
+ *  - Shift+Enter     → new paragraph (true paragraph split, not a `<br>`).
  *  - `#tag`          → autocomplete picker (same as the main editor).
+ *
+ * Saves go through `workspace.saveSnapshot` directly — no dependency on
+ * a single canvas editor (the feed has many per-card editors now).
+ * Listens for `mochi:focus-chatbox` from the Cmd-N keyboard shortcut so
+ * the user can capture from anywhere.
  */
-export function ChatBox() {
+export function ChatBox({ tagFilter = null }: Props) {
   const tags = useWorkspace((s) => s.tags);
+  const blocks = useWorkspace((s) => s.blocks);
+  const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
   const tagsRef = useRef(tags);
-  useEffect(() => { tagsRef.current = tags; }, [tags]);
+  useEffect(() => {
+    tagsRef.current = tags;
+  }, [tags]);
+  const blocksRef = useRef(blocks);
+  useEffect(() => {
+    blocksRef.current = blocks;
+  }, [blocks]);
+  const tagFilterRef = useRef(tagFilter);
+  useEffect(() => {
+    tagFilterRef.current = tagFilter;
+  }, [tagFilter]);
 
   const direction = useChatSettings((s) => s.direction);
   const setDirection = useChatSettings((s) => s.setDirection);
   const loadSettings = useChatSettings((s) => s.load);
-  useEffect(() => { loadSettings(); }, [loadSettings]);
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const [showDirMenu, setShowDirMenu] = useState(false);
 
@@ -62,8 +86,7 @@ export function ChatBox() {
             if (s && typeof s === "object" && (s as any).active) return false;
           }
           if (event.shiftKey) {
-            // Shift+Enter → split paragraph (clean cursor behavior even
-            // through many consecutive empty lines).
+            // Shift+Enter → split paragraph.
             event.preventDefault();
             view.dispatch(
               view.state.tr.split(view.state.selection.$from.pos).scrollIntoView(),
@@ -80,39 +103,58 @@ export function ChatBox() {
     },
   });
 
-  const submit = () => {
+  // Focus from anywhere via Cmd-N (App-level listener dispatches this).
+  useEffect(() => {
+    const onFocus = () => {
+      if (!editor) return;
+      editor.commands.focus("end");
+    };
+    window.addEventListener("mochi:focus-chatbox", onFocus);
+    return () => window.removeEventListener("mochi:focus-chatbox", onFocus);
+  }, [editor]);
+
+  const submit = async () => {
     if (!editor) return;
     const md: string = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
-    if (!md.trim()) return;
+    const cleaned = unescapeInlineHashtags(md).trim();
+    if (!cleaned) return;
 
-    const canvas = getCanvasEditor();
-    if (!canvas) return;
+    // Seed with the active tag filter so the new block lands in the
+    // currently-narrowed view.
+    const tagPrefix = tagFilterRef.current
+      ? `#${tagFilterRef.current} `
+      : "";
+    const finalContent = tagPrefix
+      ? `${tagPrefix}${cleaned}`
+      : cleaned;
 
-    const fake: StoredBlock = {
-      id: "",
-      parent_id: null,
-      position: 0,
-      heading: null,
-      heading_level: null,
-      content: md,
-      content_hash: "",
-      tags: [],
-      manual_tags: false,
-      created_at: 0,
-      updated_at: 0,
-    };
-    const docJson: any = jsonFromBlocks(canvas as any, [fake]);
-    const newBlockJsons: any[] = Array.isArray(docJson?.content) ? docJson.content : [];
-    if (newBlockJsons.length === 0) return;
-    const newBlocks = newBlockJsons.map((bj: any) =>
-      canvas.schema.nodeFromJSON(bj),
+    const all = [...blocksRef.current].sort((a, b) => a.position - b.position);
+    const newId = ulid();
+    let position: number;
+    let parentId: string | null = null;
+    if (direction === "top") {
+      const first = all[0];
+      position = (first?.position ?? 0) - 1;
+      parentId = first?.parent_id ?? null;
+    } else {
+      const last = all[all.length - 1];
+      position = (last?.position ?? -1) + 1;
+      parentId = last?.parent_id ?? null;
+    }
+
+    await saveSnapshot(
+      [
+        {
+          id: newId,
+          content: finalContent,
+          position,
+          parent_id: parentId,
+          heading: null,
+          heading_level: null,
+        },
+      ],
+      [],
     );
-
-    let tr = canvas.state.tr;
-    const insertPos =
-      direction === "top" ? 0 : canvas.state.doc.content.size;
-    tr = tr.insert(insertPos, newBlocks);
-    canvas.view.dispatch(tr);
 
     editor.commands.clearContent();
     editor.commands.focus();
@@ -121,7 +163,7 @@ export function ChatBox() {
   return (
     <div className="border-t border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950/95 backdrop-blur">
       <div className="max-w-3xl mx-auto px-6 py-3">
-        <div className="flex items-end gap-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm focus-within:border-neutral-400 dark:focus-within:border-neutral-600 transition-colors">
+        <div className="flex items-center gap-1.5 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-sm focus-within:border-neutral-400 dark:focus-within:border-neutral-600 transition-colors">
           <div className="flex-1 min-w-0 px-3 py-2 max-h-48 overflow-y-auto">
             <EditorContent editor={editor} />
           </div>

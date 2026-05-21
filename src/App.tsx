@@ -1,17 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./sidebar/Sidebar";
-import { CanvasEditor } from "./editor/CanvasEditor";
+import { CanvasFeed } from "./editor/CanvasFeed";
 import { ChatBox } from "./editor/ChatBox";
-import { TagsView } from "./tags-view/TagsView";
 import { SettingsModal } from "./settings/SettingsModal";
-import { TopBarSearch } from "./topbar/TopBarSearch";
+import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
 import { useDragRegion } from "./hooks/useDragRegion";
 import { ipc } from "./lib/ipc";
-import { getCanvasEditor } from "./editor/editorRef";
-import { setSearchState } from "./editor/extensions/SearchHighlight";
-
-export type MainView = "canvas" | "tags";
 
 export default function App() {
   const path = useWorkspace((s) => s.path);
@@ -20,13 +15,18 @@ export default function App() {
   const loading = useWorkspace((s) => s.loading);
   const reload = useWorkspace((s) => s.reload);
 
-  const [mainView, setMainView] = useState<MainView>("canvas");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [highlightQuery, setHighlightQuery] = useState<string>("");
   // Block id the user most recently jumped to from a search result.
-  // Drives the "active" variant of the in-editor search highlight.
+  // Drives the active-hit highlight color inside the feed.
   const [searchActiveId, setSearchActiveId] = useState<string | null>(null);
+  // When set, the main feed shows ONLY this block — used by clicks on
+  // sidebar search results to give the user a single-block focused view
+  // instead of a scroll-and-highlight pulse.
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const headerRef = useRef<HTMLElement>(null);
@@ -38,18 +38,25 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      const key = e.key.toLowerCase();
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (key === "f" || key === "k")) {
         e.preventDefault();
         e.stopPropagation();
         window.dispatchEvent(new Event("mochi:focus-search"));
         return;
       }
-      // Cmd-Z in the tags / search view: undo the last bulk action.
+      if (mod && key === "n") {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new Event("mochi:focus-chatbox"));
+        return;
+      }
+      // Cmd-Z in a non-editing context: undo the last bulk action.
       if (
         (e.metaKey || e.ctrlKey) &&
         e.key.toLowerCase() === "z" &&
-        !e.shiftKey &&
-        (mainView === "tags" || searchQuery.trim().length > 0)
+        !e.shiftKey
       ) {
         const target = e.target as HTMLElement | null;
         const inEditable =
@@ -64,7 +71,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [mainView, searchQuery]);
+  }, []);
 
   // Agent-edit detector: poll blocks.db mtime every 2s. Only triggers a
   // full reload when the on-disk mtime is meaningfully ahead of what we
@@ -98,10 +105,9 @@ export default function App() {
     };
   }, [path, reload]);
 
-  // Keep the input itself immediate, but debounce the editor-wide decoration
-  // rebuild. SearchResultsPane already debounces the IPC query; this gives the
-  // same treatment to in-canvas highlighting so typing in the search field
-  // does not synchronously scan a large document per keypress.
+  // Debounce the highlight query the same way `SearchResultsPane` debounces
+  // its IPC search — typing into the search field doesn't synchronously
+  // re-mark every visible card.
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
@@ -111,16 +117,6 @@ export default function App() {
     const id = window.setTimeout(() => setHighlightQuery(q), 120);
     return () => window.clearTimeout(id);
   }, [searchQuery]);
-
-  // Push the debounced search query + active block into the editor so its
-  // SearchHighlight plugin can underline every match in place. Lives ABOVE
-  // the splash early-return — hooks must be called unconditionally, in the
-  // same order, on every render (React error #310 otherwise).
-  useEffect(() => {
-    const editor = getCanvasEditor();
-    if (!editor) return;
-    setSearchState(editor, highlightQuery, highlightQuery ? searchActiveId : null);
-  }, [highlightQuery, searchActiveId]);
 
   if (!path) {
     return (
@@ -139,76 +135,30 @@ export default function App() {
     );
   }
 
-  const jumpTo = (id: string) => {
-    setMainView("canvas");
-    setTagFilter(null);
-    setSearchQuery("");
-    setSearchActiveId(null);
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-block-id="${CSS.escape(id)}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        (el as HTMLElement).animate(
-          [{ background: "rgba(255,225,0,0.3)" }, { background: "transparent" }],
-          { duration: 1500 },
-        );
-      }
-    });
-  };
-
-  // Search-result jump: keeps the query (and the sidebar results panel)
-  // intact so the user can flip between matches, and tags the focused
-  // block id so the SearchHighlight extension can up-shade matches
-  // inside it. Mirrors Apple Notes' search behavior.
-  const jumpToSearchResult = (id: string) => {
-    setMainView("canvas");
-    setTagFilter(null);
+  // Sidebar search-result click. Narrow the feed to just this one block
+  // (no scroll-pulse, no jump) — clicking another result swaps the focus,
+  // and the "× clear" chip on the feed returns to the full list.
+  const jumpToBlock = (id: string) => {
     setSearchActiveId(id);
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-block-id="${CSS.escape(id)}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    });
+    setFocusedBlockId(id);
   };
 
   return (
     <div className="h-full flex">
       <Sidebar
-        mainView={mainView}
         tagFilter={tagFilter}
         searchQuery={searchQuery}
+        caseSensitive={caseSensitive}
         searchActiveId={searchActiveId}
-        onShowCanvas={() => {
-          setMainView("canvas");
-          setTagFilter(null);
-          setSearchQuery("");
-          setSearchActiveId(null);
-        }}
-        onShowTags={() => {
-          setMainView("tags");
-          setSearchQuery("");
-          setSearchActiveId(null);
-        }}
         onSelectTag={(tag) => {
-          setMainView("tags");
           setTagFilter(tag);
-          setSearchQuery("");
           setSearchActiveId(null);
         }}
-        onClearFilter={() => {
-          setMainView("tags");
-          setTagFilter(null);
-        }}
-        onJumpToBlock={jumpTo}
-        onJumpToSearchResult={jumpToSearchResult}
+        onClearFilter={() => setTagFilter(null)}
+        onJumpToSearchResult={jumpToBlock}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Search header lives only over the main panel — the sidebar gets
-            the rest of the title-bar row to itself (with traffic-light
-            padding). `data-tauri-drag-region` lets the user drag by the
-            empty parts of the bar; the input opts out automatically. */}
         <header
           ref={headerRef}
           data-tauri-drag-region
@@ -219,37 +169,33 @@ export default function App() {
             onChange={(q) => {
               setSearchQuery(q);
               setSearchActiveId(null);
+              setFocusedBlockId(null);
             }}
-            tagFilter={mainView === "tags" ? tagFilter : null}
+            caseSensitive={caseSensitive}
+            onCaseSensitiveChange={setCaseSensitive}
+            dateRange={dateRange}
+            onDateRangeChange={setDateRange}
+            tagFilter={tagFilter}
           />
         </header>
-        {/*
-          The CanvasEditor + ChatBox tree is mounted exactly once per
-          workspace (`key={path}`). On large docs (2k+ blocks) re-mounting
-          it is the single biggest cost when toggling between Canvas and
-          Tags. Instead of unmount/remount we hide it via `display: none`
-          while another view is active. State (cursor, scroll position,
-          ProseMirror history) is preserved.
-        */}
-        <div
-          className="flex-1 flex flex-col overflow-hidden"
-          style={{
-            display: mainView === "canvas" ? "flex" : "none",
-          }}
-        >
-          <CanvasEditor key={path} />
-          <ChatBox />
-        </div>
-
-        {mainView === "tags" && (
-          <TagsView
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <CanvasFeed
+            key={path}
+            searchQuery={highlightQuery}
+            caseSensitive={caseSensitive}
+            activeSearchId={searchActiveId}
             tagFilter={tagFilter}
-            searchQuery={searchQuery}
-            onClearFilter={() => setTagFilter(null)}
-            onClearSearch={() => setSearchQuery("")}
-            onJumpToBlock={jumpTo}
+            onClearTagFilter={() => setTagFilter(null)}
+            focusedBlockId={focusedBlockId}
+            onClearFocusedBlock={() => {
+              setFocusedBlockId(null);
+              setSearchActiveId(null);
+            }}
+            dateRange={dateRange}
+            onClearDateRange={() => setDateRange({ from: null, to: null })}
           />
-        )}
+          <ChatBox tagFilter={tagFilter} />
+        </div>
       </main>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>

@@ -52,8 +52,14 @@ export function BlockMenu({
   onSplitAtCursor,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const turnIntoRef = useRef<HTMLDivElement>(null);
   const [showTurnInto, setShowTurnInto] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  // Whether the Turn Into submenu should open to the LEFT of its parent
+  // row (instead of the default right). Set when the right-side opening
+  // would clip off the viewport — same pattern as the parent-menu flip
+  // below, but local to the submenu.
+  const [turnIntoFlipLeft, setTurnIntoFlipLeft] = useState(false);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -96,6 +102,20 @@ export function BlockMenu({
     setPos({ top, left });
   }, [anchorRect]);
 
+  // After the Turn Into submenu opens, measure where the right edge
+  // would land and flip to the left side if it would clip off-screen.
+  useLayoutEffect(() => {
+    if (!showTurnInto) return;
+    const parentRect = ref.current?.getBoundingClientRect();
+    const sub = turnIntoRef.current;
+    if (!parentRect || !sub) return;
+    const subWidth = sub.getBoundingClientRect().width;
+    const margin = 8;
+    const wouldOverflow =
+      parentRect.right + subWidth + margin > window.innerWidth;
+    setTurnIntoFlipLeft(wouldOverflow);
+  }, [showTurnInto, pos]);
+
   if (!anchorRect) return null;
 
   const style: React.CSSProperties = {
@@ -128,8 +148,11 @@ export function BlockMenu({
         </button>
         {showTurnInto && editor && (
           <div
+            ref={turnIntoRef}
             onMouseLeave={() => setShowTurnInto(false)}
-            className="absolute left-full top-0 ml-1 w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl py-1"
+            className={`absolute top-0 w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl py-1 ${
+              turnIntoFlipLeft ? "right-full mr-1" : "left-full ml-1"
+            }`}
           >
             {BLOCK_TYPES.map((b) => {
               const active = b.id === activeBlockTypeId;

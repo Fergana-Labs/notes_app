@@ -153,7 +153,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
             heading: input.heading ?? null,
             heading_level: input.heading_level ?? null,
             tags: extractInlineTags(input.content),
-            updated_at: now,
+            // Only bump updated_at when CONTENT changed. Structural ops
+            // (reorder, insert-below renumber, group, etc.) send dozens
+            // of blocks in one save just to update positions — if we
+            // stamp updated_at=now for all of them, the feed reports
+            // "edited 3m ago" for blocks that weren't touched.
+            updated_at: contentChanged ? now : existing.updated_at,
           });
           seen.add(existing.id);
         } else {

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowRight } from "lucide-react";
 import { ipc, type SearchHit } from "../lib/ipc";
 
 interface Props {
   query: string;
+  caseSensitive: boolean;
   activeId: string | null;
   onJump: (id: string, query: string) => void;
 }
@@ -21,7 +21,12 @@ interface Props {
  * by rank, which is fine for navigation; using that order also means
  * the pane stays stable while the user edits matched blocks.
  */
-export function SearchResultsPane({ query, activeId, onJump }: Props) {
+export function SearchResultsPane({
+  query,
+  caseSensitive,
+  activeId,
+  onJump,
+}: Props) {
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
 
@@ -36,7 +41,7 @@ export function SearchResultsPane({ query, activeId, onJump }: Props) {
     let cancelled = false;
     const t = setTimeout(() => {
       ipc
-        .search(q, 200)
+        .search(q, 200, caseSensitive)
         .then((res) => {
           if (cancelled) return;
           setHits(res);
@@ -54,7 +59,7 @@ export function SearchResultsPane({ query, activeId, onJump }: Props) {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query]);
+  }, [query, caseSensitive]);
 
   const ordered = hits ?? [];
 
@@ -79,7 +84,7 @@ export function SearchResultsPane({ query, activeId, onJump }: Props) {
             <li key={h.id}>
               <button
                 onClick={() => onJump(h.id, query)}
-                className={`group w-full text-left rounded px-2 py-1.5 text-xs transition-colors ${
+                className={`w-full text-left rounded px-2 py-1.5 text-xs transition-colors ${
                   active
                     ? "bg-blue-100 dark:bg-blue-900/40 text-blue-900 dark:text-blue-100"
                     : "hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200"
@@ -92,9 +97,6 @@ export function SearchResultsPane({ query, activeId, onJump }: Props) {
                   className="text-neutral-500 dark:text-neutral-400 line-clamp-2"
                   dangerouslySetInnerHTML={{ __html: h.snippet }}
                 />
-                <div className="hidden group-hover:flex items-center gap-1 mt-1 text-[10px] text-neutral-400">
-                  <ArrowRight size={10} /> jump to block
-                </div>
               </button>
             </li>
           );

@@ -146,6 +146,14 @@ impl AppState {
             db::heal_manual_tags(conn)?;
         }
 
+        // v3 → v4: add the `folder` column to tag_metadata for the
+        // sidebar folder-tree UI. Folder is an organizational marker
+        // only — it doesn't appear in tag names or block content.
+        // ALTER TABLE silently no-ops if the column already exists.
+        if current < 4 {
+            let _ = conn.execute("ALTER TABLE tag_metadata ADD COLUMN folder TEXT", []);
+        }
+
         db::set_setting(
             conn,
             "schema_version",

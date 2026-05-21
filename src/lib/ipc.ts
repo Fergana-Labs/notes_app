@@ -27,6 +27,19 @@ export interface BlockVersion {
 export interface TagCount {
   tag: string;
   count: number;
+  description: string;
+  /** Explicit sort_order from tag_metadata (1-indexed). Null when the tag
+   *  has never been reordered/described — those tags fall back to
+   *  count-descending order at the end of the list. */
+  sort_order: number | null;
+  /** Folder name this tag is organized under in the sidebar, or null
+   *  for root. Folders are visual-only — they never appear in the
+   *  tag's name or in block content. */
+  folder: string | null;
+}
+
+export interface DeleteTagResult {
+  affected_block_ids: string[];
 }
 
 export interface SearchHit {
@@ -86,8 +99,19 @@ export const ipc = {
   listBlocksByTag: (tag: string) =>
     invoke<StoredBlock[]>("list_blocks_by_tag", { tag }),
   listTags: () => invoke<TagCount[]>("list_tags"),
-  search: (query: string, limit = 50) =>
-    invoke<SearchHit[]>("search", { query, limit }),
+  setTagDescription: (name: string, description: string) =>
+    invoke<void>("set_tag_description", { name, description }),
+  reorderTags: (names: string[]) => invoke<void>("reorder_tags", { names }),
+  setTagFolder: (name: string, folder: string | null) =>
+    invoke<void>("set_tag_folder", { name, folder }),
+  deleteTag: (name: string, mode: "strip" | "delete_blocks") =>
+    invoke<DeleteTagResult>("delete_tag", { name, mode }),
+  search: (query: string, limit = 50, caseSensitive = false) =>
+    invoke<SearchHit[]>("search", {
+      query,
+      limit,
+      caseSensitive,
+    }),
   saveBlocks: (
     blocks: BlockInput[],
     deletedIds: string[] = [],

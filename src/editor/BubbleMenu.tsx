@@ -11,7 +11,8 @@ import {
   ChevronDown,
   Type as TypeIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { BLOCK_TYPES } from "./blockTypes";
 
 interface Props {
@@ -211,12 +212,39 @@ function TurnIntoButton({
   onOpenChange: (v: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const current = BLOCK_TYPES.find((b) => b.id === activeTypeId) ?? BLOCK_TYPES[0];
+  // Portal anchor — the dropdown is rendered into document.body with
+  // viewport-fixed coords so it escapes the bubble menu's positioning
+  // context (which can clip it behind cards below).
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setAnchorRect(null);
+      return;
+    }
+    const measure = () => {
+      const el = ref.current?.querySelector("button");
+      if (!el) return;
+      setAnchorRect(el.getBoundingClientRect());
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onOpenChange(false);
+      const t = e.target as Node;
+      if (ref.current?.contains(t)) return;
+      if (dropdownRef.current?.contains(t)) return;
+      onOpenChange(false);
     };
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
@@ -237,32 +265,46 @@ function TurnIntoButton({
         <span className="hidden sm:inline">{current.label}</span>
         <ChevronDown size={11} />
       </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1 z-50">
-          {BLOCK_TYPES.map((b) => {
-            const active = b.id === activeTypeId;
-            return (
-              <button
-                key={b.id}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  b.apply(editor);
-                  onOpenChange(false);
-                }}
-                className={`w-full flex items-center gap-2 px-2 py-1 text-left text-sm ${
-                  active
-                    ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
-                    : "hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200"
-                }`}
-              >
-                <b.icon size={14} className="shrink-0" />
-                <span className="truncate">{b.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {open && anchorRect &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              position: "fixed",
+              top: anchorRect.bottom + 4,
+              left: Math.min(
+                anchorRect.left,
+                window.innerWidth - 200,
+              ),
+              zIndex: 70,
+            }}
+            className="w-48 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1"
+          >
+            {BLOCK_TYPES.map((b) => {
+              const active = b.id === activeTypeId;
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    b.apply(editor);
+                    onOpenChange(false);
+                  }}
+                  className={`w-full flex items-center gap-2 px-2 py-1 text-left text-sm ${
+                    active
+                      ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
+                      : "hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-200"
+                  }`}
+                >
+                  <b.icon size={14} className="shrink-0" />
+                  <span className="truncate">{b.label}</span>
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

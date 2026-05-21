@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Tag metadata that doesn't live in block content: a user-visible
+-- description and an explicit sort order driven by drag-reorder in the
+-- sidebar. Rows are lazily inserted on first edit — tags without
+-- metadata still appear in list_tags via a LEFT JOIN.
+CREATE TABLE IF NOT EXISTS tag_metadata (
+  name TEXT PRIMARY KEY,
+  description TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER,
+  folder TEXT,
+  updated_at INTEGER NOT NULL
+);
 "#;
 
 pub fn open(workspace: &Path) -> Result<Connection> {
@@ -57,7 +69,32 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;
+    // Idempotent column adds for existing workspaces. ALTER TABLE ADD
+    // COLUMN errors with "duplicate column" if the column already exists,
+    // which is fine — we swallow that error class only.
+    add_column_if_missing(&conn, "tag_metadata", "folder", "TEXT")?;
     Ok(conn)
+}
+
+/// Add a column if it doesn't already exist. Catches the
+/// "duplicate column name" sqlite error and treats it as success.
+/// Used in place of versioned migrations for additive schema changes.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_type: &str,
+) -> Result<()> {
+    let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, column_type);
+    match conn.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,21 +153,213 @@ pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBloc
 pub struct TagCount {
     pub tag: String,
     pub count: i64,
+    pub description: String,
+    pub sort_order: Option<i64>,
+    pub folder: Option<String>,
 }
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
+    // Aggregate raw counts from blocks, then LEFT JOIN tag_metadata so
+    // tags without explicit metadata still appear. Ordering: tags with
+    // an explicit sort_order come first (in that order); the rest fall
+    // back to count DESC, then alphabetical.
     let mut stmt = conn.prepare(
-        "SELECT je.value AS tag, COUNT(*) AS c FROM blocks, json_each(blocks.tags) je GROUP BY tag ORDER BY c DESC",
+        "SELECT t.tag, t.c, COALESCE(tm.description, '') AS description, tm.sort_order, tm.folder
+         FROM (SELECT je.value AS tag, COUNT(*) AS c
+               FROM blocks, json_each(blocks.tags) je
+               GROUP BY tag) t
+         LEFT JOIN tag_metadata tm ON tm.name = t.tag
+         ORDER BY CASE WHEN tm.sort_order IS NULL THEN 1 ELSE 0 END,
+                  tm.sort_order ASC,
+                  t.c DESC,
+                  t.tag ASC",
     )?;
     let rows = stmt
         .query_map([], |row| {
             Ok(TagCount {
                 tag: row.get(0)?,
                 count: row.get(1)?,
+                description: row.get(2)?,
+                sort_order: row.get(3)?,
+                folder: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Move a tag into a folder (or to the root by passing `None`).
+/// Folders are organization-only: the tag name is unchanged in every
+/// block. Lazily upserts a `tag_metadata` row if one doesn't exist.
+pub fn set_tag_folder(conn: &Connection, name: &str, folder: Option<&str>) -> Result<()> {
+    let now = Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO tag_metadata(name, description, sort_order, folder, updated_at)
+         VALUES(?1, '', NULL, ?2, ?3)
+         ON CONFLICT(name) DO UPDATE SET
+           folder = excluded.folder,
+           updated_at = excluded.updated_at",
+        params![name, folder, now],
+    )?;
+    Ok(())
+}
+
+/// Upsert a user-visible description for `name`. Empty string is a valid
+/// "no description" value (vs deleting the row), since we want to
+/// preserve sort_order through description edits.
+pub fn set_tag_description(conn: &Connection, name: &str, description: &str) -> Result<()> {
+    let now = Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO tag_metadata(name, description, sort_order, updated_at)
+         VALUES(?1, ?2, NULL, ?3)
+         ON CONFLICT(name) DO UPDATE SET
+           description = excluded.description,
+           updated_at = excluded.updated_at",
+        params![name, description, now],
+    )?;
+    Ok(())
+}
+
+/// Replace the sort order across a list of tags. `names` is the new
+/// order, 1-indexed. Tags not in the list keep their existing order
+/// (or remain unranked if they had no metadata row).
+pub fn reorder_tags(conn: &mut Connection, names: &[String]) -> Result<()> {
+    let now = Utc::now().timestamp_millis();
+    let tx = conn.transaction()?;
+    for (idx, name) in names.iter().enumerate() {
+        let order = (idx as i64) + 1;
+        tx.execute(
+            "INSERT INTO tag_metadata(name, description, sort_order, updated_at)
+             VALUES(?1, '', ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET
+               sort_order = excluded.sort_order,
+               updated_at = excluded.updated_at",
+            params![name, order, now],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Delete a tag globally. Two modes:
+///   - "strip": remove inline `#name` from every block that contains
+///     it, re-saving the blocks. Tag disappears once no block carries
+///     it (since list_tags aggregates from blocks).
+///   - "delete_blocks": drop every block that contains the tag.
+/// In both cases the tag_metadata row is removed.
+pub fn delete_tag(
+    conn: &mut Connection,
+    name: &str,
+    mode: &str,
+) -> Result<Vec<String>> {
+    let now = Utc::now().timestamp_millis();
+    let needle = format!("\"{}\"", name.to_lowercase());
+    let tx = conn.transaction()?;
+
+    let affected_ids: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM blocks WHERE instr(tags, ?1) > 0",
+        )?;
+        let ids: rusqlite::Result<Vec<String>> = stmt
+            .query_map(params![needle], |r| r.get::<_, String>(0))?
+            .collect();
+        ids?
+    };
+
+    match mode {
+        "strip" => {
+            for id in &affected_ids {
+                let content: String = tx.query_row(
+                    "SELECT content FROM blocks WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?;
+                let new_content = strip_inline_hashtag(&content, name);
+                let new_hash = parser::hash(&new_content);
+                let extracted = parser::extract_hashtags(&new_content);
+                let tags_json = serde_json::to_string(&extracted)?;
+                let heading: Option<String> = tx.query_row(
+                    "SELECT heading FROM blocks WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?;
+
+                tx.execute(
+                    "UPDATE blocks SET content = ?1, content_hash = ?2, tags = ?3, updated_at = ?4 WHERE id = ?5",
+                    params![new_content, new_hash, tags_json, now, id],
+                )?;
+                tx.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
+                tx.execute(
+                    "INSERT INTO blocks_fts(id, content, tags, heading) VALUES(?1, ?2, ?3, ?4)",
+                    params![id, new_content, extracted.join(" "), heading.unwrap_or_default()],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO block_versions(block_id, content_hash, content, parent_hash, edited_at, source)
+                     VALUES(?1, ?2, ?3, NULL, ?4, 'tag-delete-strip')",
+                    params![id, new_hash, new_content, now],
+                )?;
+            }
+        }
+        "delete_blocks" => {
+            for id in &affected_ids {
+                tx.execute("DELETE FROM blocks WHERE id = ?1", params![id])?;
+                tx.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
+            }
+        }
+        _ => {
+            return Err(AppError::Other(format!("unknown delete_tag mode: {mode}")));
+        }
+    }
+
+    tx.execute("DELETE FROM tag_metadata WHERE name = ?1", params![name])?;
+    tx.commit()?;
+    Ok(affected_ids)
+}
+
+/// Remove every inline occurrence of `#tag` from a markdown source —
+/// mirrors `stripHashtagsFromMarkdown` in src/editor/CanvasFeed.tsx so
+/// the round-trip is consistent. Skips fenced code blocks.
+///
+/// NOTE: Rust's `regex` crate doesn't support lookaround, so we can't
+/// use `(?!...)` like the JS side. Instead, the pattern captures the
+/// *following* char (or matches end-of-line) as group 2 and the
+/// replacement preserves both groups — this is equivalent in effect.
+fn strip_inline_hashtag(content: &str, tag: &str) -> String {
+    let escaped = regex::escape(tag);
+    let pattern = format!(r"(?i)(^|\s)#{}([^A-Za-z0-9_\-/]|$)", escaped);
+    let re = match regex::Regex::new(&pattern) {
+        Ok(r) => r,
+        Err(_) => return content.to_string(),
+    };
+    let multi_space = regex::Regex::new(r"[ \t]{2,}").unwrap();
+    let trailing_ws = regex::Regex::new(r"[ \t]+$").unwrap();
+    let triple_newline = regex::Regex::new(r"\n{3,}").unwrap();
+
+    let mut in_fence = false;
+    let mut out_lines: Vec<String> = Vec::new();
+    for line in content.split('\n') {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            out_lines.push(line.to_string());
+            continue;
+        }
+        if in_fence {
+            out_lines.push(line.to_string());
+            continue;
+        }
+        // `$1` is the leading whitespace (or empty if start-of-line);
+        // `$2` is the following non-tag character (or empty if end-of-line).
+        // Preserving both keeps surrounding punctuation/whitespace intact.
+        let stripped: String = re.replace_all(line, "$1$2").to_string();
+        let collapsed = multi_space.replace_all(&stripped, " ").to_string();
+        let trimmed = trailing_ws.replace_all(&collapsed, "").to_string();
+        out_lines.push(trimmed);
+    }
+    let joined = out_lines.join("\n");
+    triple_newline
+        .replace_all(&joined, "\n\n")
+        .trim_matches('\n')
+        .to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -140,25 +369,54 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-pub fn search(conn: &Connection, query: &str, limit: i64) -> Result<Vec<SearchHit>> {
+pub fn search(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+    case_sensitive: bool,
+) -> Result<Vec<SearchHit>> {
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
     let q = sanitize_fts_query(query);
-    let mut stmt = conn.prepare(
-        "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
-         FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
-         WHERE blocks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
-    )?;
-    let rows = stmt
-        .query_map(params![q, limit], |row| {
+    // SQLite FTS5 is always case-insensitive. For case-sensitive search
+    // we still let FTS find candidate hits (cheap, indexed), then add a
+    // case-sensitive `instr` post-filter that requires the literal
+    // trimmed query be present in the block's content.
+    let literal = query.trim();
+    let mut stmt = if case_sensitive {
+        conn.prepare(
+            "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
+             FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
+             WHERE blocks_fts MATCH ?1 AND instr(b.content, ?3) > 0
+             ORDER BY rank LIMIT ?2",
+        )?
+    } else {
+        conn.prepare(
+            "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
+             FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
+             WHERE blocks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        )?
+    };
+    let rows: Vec<SearchHit> = if case_sensitive {
+        stmt.query_map(params![q, limit, literal], |row| {
             Ok(SearchHit {
                 id: row.get(0)?,
                 heading: row.get(1)?,
                 snippet: row.get(2)?,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(params![q, limit], |row| {
+            Ok(SearchHit {
+                id: row.get(0)?,
+                heading: row.get(1)?,
+                snippet: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
     Ok(rows)
 }
 
@@ -239,11 +497,13 @@ pub fn save_snapshot(
                content_hash=excluded.content_hash,
                tags=excluded.tags,
                manual_tags=excluded.manual_tags,
+               -- updated_at bumps ONLY when the content actually changed.
+               -- Position / parent_id / heading_level changes are
+               -- structural (drag-reorder, group, insert-below renumber)
+               -- and shouldn't lie about when the user last touched the
+               -- block. Heading text change IS a content change, so the
+               -- content_hash check catches it.
                updated_at=CASE WHEN blocks.content_hash=excluded.content_hash
-                               AND blocks.position=excluded.position
-                               AND blocks.parent_id IS excluded.parent_id
-                               AND blocks.heading IS excluded.heading
-                               AND blocks.heading_level IS excluded.heading_level
                           THEN blocks.updated_at ELSE excluded.updated_at END",
             params![
                 b.id,
