@@ -452,3 +452,138 @@ mark { background: oklch(0.95 0.1 100); padding: 0 2px; border-radius: 2px; }
     color: black;
   }
 }
+
+/* ============================================================
+ * Colorful mode — sage-green palette borrowed from stash_desktop.
+ * Activated by `.colorful` on <html> (toggled in App.tsx).
+ *
+ * Strategy: instead of editing 40+ tag/highlight call sites, we
+ * re-map every blue-* Tailwind utility actually used in the app
+ * to a stash-derived sage equivalent. Sidebar surface itself is
+ * set directly in Sidebar.tsx (Tailwind arbitrary value); the
+ * white-on-green text inside is handled below.
+ *
+ * Source palette (stash_desktop/electron/src/renderer/index.css):
+ *   --sidebar:               #557153
+ *   --sidebar-border:        #4a6741
+ *   --sidebar-foreground:    #ffffff
+ *   --sidebar-foreground-mu: #b3c4b1
+ *   --primary:               #87a970
+ *   --primary-hover:         #7a9c64
+ *   --primary-active:        #6d8f58
+ *   --secondary:             #557153
+ *   --secondary-hover:       #4a6448
+ *   --secondary-active:      #3f573d
+ * ============================================================ */
+
+/* Sidebar inner text — the colored chrome means neutral grays need
+ * to flip to white / pale sage for legibility. */
+.colorful aside {
+  color: #ffffff;
+}
+.colorful aside .text-neutral-400,
+.colorful aside .text-neutral-500,
+.colorful aside .text-neutral-600 {
+  color: #b3c4b1;
+}
+.colorful aside .text-neutral-700,
+.colorful aside .text-neutral-800,
+.colorful aside .text-neutral-900,
+.colorful aside .dark\:text-neutral-100,
+.colorful aside .dark\:text-neutral-200,
+.colorful aside .dark\:text-neutral-300,
+.colorful aside .dark\:text-neutral-400 {
+  color: #ffffff;
+}
+.colorful aside .border-neutral-100,
+.colorful aside .border-neutral-200,
+.colorful aside .dark\:border-neutral-700,
+.colorful aside .dark\:border-neutral-800 {
+  border-color: #4a6741;
+}
+.colorful aside .hover\:bg-neutral-50:hover,
+.colorful aside .hover\:bg-neutral-100:hover,
+.colorful aside .dark\:hover\:bg-neutral-800:hover,
+.colorful aside .dark\:hover\:bg-neutral-800\/50:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.colorful aside .bg-neutral-100,
+.colorful aside .dark\:bg-neutral-800 {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Map every blue-* utility used in the app to a sage equivalent.
+ * Each rule is scoped under `.colorful` so it only fires when the
+ * setting is on. Dark-variant overrides live inside their own
+ * `@media (prefers-color-scheme: dark)` block at the bottom. */
+.colorful .bg-blue-50            { background-color: #eaf0e3; }
+.colorful .bg-blue-100           { background-color: #dde6d2; }
+.colorful .bg-blue-500           { background-color: #87a970; }
+.colorful .bg-blue-600           { background-color: #557153; }
+.colorful .hover\:bg-blue-50:hover   { background-color: #dde6d2; }
+.colorful .hover\:bg-blue-700:hover  { background-color: #4a6448; }
+.colorful .active\:bg-blue-800:active { background-color: #3f573d; }
+
+.colorful .text-blue-400         { color: #95b57e; }
+.colorful .text-blue-400\/60     { color: rgba(149, 181, 126, 0.6); }
+.colorful .text-blue-500         { color: #87a970; }
+.colorful .text-blue-600         { color: #6d8f58; }
+.colorful .text-blue-700         { color: #557153; }
+.colorful .text-blue-800         { color: #4a6448; }
+.colorful .text-blue-900         { color: #3f573d; }
+.colorful .hover\:text-blue-700:hover { color: #557153; }
+.colorful .hover\:text-blue-900:hover { color: #3f573d; }
+
+.colorful .border-blue-300       { border-color: #b3c4b1; }
+.colorful .border-blue-400       { border-color: #95b57e; }
+.colorful .border-blue-600       { border-color: #557153; }
+
+.colorful .ring-blue-200         { --tw-ring-color: #c5d4b6; }
+.colorful .ring-blue-300         { --tw-ring-color: #b3c4b1; }
+.colorful .ring-blue-600         { --tw-ring-color: #557153; }
+.colorful .ring-blue-800         { --tw-ring-color: #3f573d; }
+
+@media (prefers-color-scheme: dark) {
+  .colorful .dark\:bg-blue-900\/20  { background-color: rgba(85, 113, 83, 0.20); }
+  .colorful .dark\:bg-blue-900\/30  { background-color: rgba(85, 113, 83, 0.30); }
+  .colorful .dark\:bg-blue-900\/40  { background-color: rgba(85, 113, 83, 0.40); }
+  .colorful .dark\:hover\:bg-blue-900\/30:hover { background-color: rgba(85, 113, 83, 0.30); }
+
+  .colorful .dark\:text-blue-100   { color: #d3dfca; }
+  .colorful .dark\:text-blue-200   { color: #c5d4b6; }
+  .colorful .dark\:text-blue-300   { color: #a3c18c; }
+  .colorful .dark\:text-blue-400   { color: #95b57e; }
+  .colorful .dark\:hover\:text-blue-100:hover { color: #d3dfca; }
+  .colorful .dark\:hover\:text-blue-200:hover { color: #c5d4b6; }
+
+  .colorful .dark\:border-blue-600 { border-color: #557153; }
+  .colorful .dark\:border-blue-700 { border-color: #4a6448; }
+}
+
+/* Canvas / Newest / Oldest sort selector: re-tint the active segment
+ * to deep sage in colorful mode (instead of high-contrast neutral). */
+.colorful .mochi-sort-toggle {
+  border-color: #b3c4b1;
+}
+.colorful .mochi-sort-toggle .bg-neutral-900 {
+  background-color: #557153;
+  color: #ffffff;
+}
+.colorful .mochi-sort-toggle .text-neutral-500 {
+  color: #6d8f58;
+}
+.colorful .mochi-sort-toggle .hover\:bg-neutral-100:hover {
+  background-color: #eaf0e3;
+}
+@media (prefers-color-scheme: dark) {
+  .colorful .mochi-sort-toggle {
+    border-color: #4a6741;
+  }
+  .colorful .mochi-sort-toggle .dark\:bg-neutral-100 {
+    background-color: #87a970;
+    color: #1f2419;
+  }
+  .colorful .mochi-sort-toggle .dark\:hover\:bg-neutral-800:hover {
+    background-color: rgba(135, 169, 112, 0.18);
+  }
+}

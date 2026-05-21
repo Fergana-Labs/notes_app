@@ -26,11 +26,10 @@ export function htmlFromBlocks(blocks: StoredBlock[]): string {
         b.tags.length > 0
           ? ` data-tags='${escapeAttr(JSON.stringify(b.tags))}'`
           : "";
-      const manualAttr = b.manual_tags ? ` data-manual-tags="true"` : "";
       // Empty blocks need at least one paragraph so PM has somewhere to put
       // the cursor.
       const safeInner = inner.trim() ? inner : "<p></p>";
-      return `<div data-block-id="${b.id}"${tagsAttr}${manualAttr}>${safeInner}</div>`;
+      return `<div data-block-id="${b.id}"${tagsAttr}>${safeInner}</div>`;
     })
     .join("");
 }

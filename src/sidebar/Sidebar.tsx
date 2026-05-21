@@ -3,6 +3,7 @@ import { Settings as SettingsIcon } from "lucide-react";
 import { TagsPane } from "./TagsPane";
 import { SearchResultsPane } from "./SearchResultsPane";
 import { useDragRegion } from "../hooks/useDragRegion";
+import { useUISettings } from "../stores/uiSettings";
 
 interface Props {
   tagFilter: string | null;
@@ -34,11 +35,26 @@ export function Sidebar({
 }: Props) {
   const navRef = useRef<HTMLElement>(null);
   useDragRegion(navRef);
+  const colorful = useUISettings((s) => s.colorful);
 
   const searchActive = searchQuery.trim().length > 0;
 
+  // Colorful mode: the actual deep sage from stash_desktop's sidebar
+  // (`--sidebar: #557153` + `--sidebar-border: #4a6741`). Same colors
+  // light and dark — the sidebar reads as a colored chrome rather
+  // than a tinted surface. Inner content overrides for white-on-green
+  // text live in index.css (scoped to `.colorful aside`).
+  const surfaceClass = colorful
+    ? "bg-[#557153] text-white"
+    : "bg-white/40 dark:bg-neutral-950/40";
+  const borderClass = colorful
+    ? "border-[#4a6741]"
+    : "border-neutral-200 dark:border-neutral-800";
+
   return (
-    <aside className="w-72 border-r border-neutral-200 dark:border-neutral-800 flex flex-col bg-white/40 dark:bg-neutral-950/40 backdrop-blur shrink-0">
+    <aside
+      className={`w-72 border-r flex flex-col backdrop-blur shrink-0 ${surfaceClass} ${borderClass}`}
+    >
       {/* Header bar aligned with the top-bar height. `pl-[80px]` clears the
           macOS traffic-light buttons (overlaid because of titleBarStyle:
           Overlay). The whole strip is a tauri drag region so the window

@@ -1,5 +1,7 @@
 use crate::config;
-use crate::db::{self, BackupInfo, BlockInput, BlockVersion, SearchHit, StoredBlock, TagCount};
+use crate::db::{
+    self, BackupInfo, BlockInput, BlockVersion, SavedBlock, SearchHit, StoredBlock, TagCount,
+};
 use crate::error::{AppError, Result};
 use crate::state::AppState;
 use rusqlite::{Connection, OpenFlags};
@@ -207,25 +209,27 @@ pub struct SaveBlocksArgs {
 
 #[derive(Debug, Serialize)]
 pub struct SaveResult {
-    pub changed_ids: Vec<String>,
+    /// Canonical post-save state for every input block. The frontend
+    /// patches its in-memory store from these rather than guessing
+    /// what the server did — since `save_snapshot` strips hashtags
+    /// from content and merges tags, what comes back may differ from
+    /// what went in.
+    pub saved: Vec<SavedBlock>,
     pub mtime: i64,
 }
 
-/// Save a (typically diff-only) batch of blocks plus any deletions. Returns
-/// the IDs whose content actually changed (per the DB's hash check) plus the
-/// new `blocks.db` mtime — the frontend already has the latest content
-/// locally, so there's no point re-fetching the whole table over IPC after
-/// every keystroke.
+/// Save a (typically diff-only) batch of blocks plus any deletions.
+/// Returns the canonical state of every saved block (after hashtag
+/// stripping and tag merging) plus the new `blocks.db` mtime — the
+/// frontend uses this to patch its in-memory store in place rather
+/// than refetching the whole table over IPC after every keystroke.
 #[tauri::command]
 pub fn save_blocks(args: SaveBlocksArgs, state: State<'_, AppState>) -> Result<SaveResult> {
     state.with(|ws| {
         let source = args.source.unwrap_or_else(|| "canvas".to_string());
-        let changed = db::save_snapshot(&mut ws.db, &args.blocks, &args.deleted_ids, &source)?;
+        let saved = db::save_snapshot(&mut ws.db, &args.blocks, &args.deleted_ids, &source)?;
         let mtime = blocks_db_mtime(&ws.root);
-        Ok(SaveResult {
-            changed_ids: changed,
-            mtime,
-        })
+        Ok(SaveResult { saved, mtime })
     })
 }
 
@@ -362,6 +366,8 @@ pub fn should_backup(state: State<'_, AppState>) -> Result<bool> {
 
 /// Synthesize a `canvas.md` from the current block table and write it to the
 /// workspace root. Returns the absolute path written so the UI can show it.
+/// Tags are appended as a trailing `#a #b` line per block so the export
+/// round-trips back to inline hashtags if re-imported.
 #[tauri::command]
 pub fn export_canvas(state: State<'_, AppState>) -> Result<String> {
     state.with(|ws| {
@@ -373,6 +379,14 @@ pub fn export_canvas(state: State<'_, AppState>) -> Result<String> {
             }
             out.push_str(&format!("<!-- block:{} -->\n", b.id));
             out.push_str(&b.content);
+            if !b.tags.is_empty() {
+                if !b.content.is_empty() {
+                    out.push_str("\n\n");
+                }
+                let tag_line: String =
+                    b.tags.iter().map(|t| format!("#{}", t)).collect::<Vec<_>>().join(" ");
+                out.push_str(&tag_line);
+            }
         }
         out.push('\n');
         let path = ws.root.join("canvas.md");

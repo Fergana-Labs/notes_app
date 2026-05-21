@@ -5,6 +5,7 @@ import { ChatBox } from "./editor/ChatBox";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
+import { useUISettings } from "./stores/uiSettings";
 import { useDragRegion } from "./hooks/useDragRegion";
 import { ipc } from "./lib/ipc";
 
@@ -32,9 +33,18 @@ export default function App() {
   const headerRef = useRef<HTMLElement>(null);
   useDragRegion(headerRef);
 
+  const loadUISettings = useUISettings((s) => s.load);
+  const colorful = useUISettings((s) => s.colorful);
   useEffect(() => {
     bootstrap();
-  }, [bootstrap]);
+    loadUISettings();
+  }, [bootstrap, loadUISettings]);
+  // Toggle a root `.colorful` class so the sage-palette overrides in
+  // index.css activate. Scope is global (the class lives on <html>)
+  // so portaled menus + modals inherit the palette too.
+  useEffect(() => {
+    document.documentElement.classList.toggle("colorful", colorful);
+  }, [colorful]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

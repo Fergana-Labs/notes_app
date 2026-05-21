@@ -11,11 +11,13 @@ import { createPortal } from "react-dom";
 import {
   AlignVerticalSpaceAround,
   ArrowLeft,
+  CheckSquare,
   Combine,
   Download,
   GripVertical,
   Maximize2,
   MoreHorizontal,
+  Pin,
   Plus,
   SplitSquareVertical,
   Trash2,
@@ -395,6 +397,14 @@ export function CanvasFeed({
       arr = [...arr].sort((a, b) => b.updated_at - a.updated_at);
     else if (sort === "oldest")
       arr = [...arr].sort((a, b) => a.updated_at - b.updated_at);
+    // Pinned blocks float to the top, preserving the chosen sort
+    // order within each partition. The single-block "focused" view
+    // bypasses this (still one card).
+    if (arr.length > 1) {
+      const pinned = arr.filter((b) => b.pinned);
+      const rest = arr.filter((b) => !b.pinned);
+      arr = pinned.length > 0 ? [...pinned, ...rest] : arr;
+    }
     return arr;
   }, [
     canvas,
@@ -722,19 +732,30 @@ export function CanvasFeed({
     const t = raw.trim().toLowerCase().replace(/^#/, "");
     if (!/^[A-Za-z][A-Za-z0-9_\-/]*$/.test(t)) return;
     if (block.tags.includes(t)) return;
-    const trimmed = block.content.replace(/\s+$/, "");
-    const newContent = trimmed
-      ? `${trimmed}\n\n#${t}`
-      : `#${t}`;
     await runWithUndo("Add tag", async () => {
-      await saveSnapshot([asBlockInput(block, { content: newContent })], []);
+      await saveSnapshot(
+        [asBlockInput(block, { tags: [...block.tags, t] })],
+        [],
+      );
     });
   };
 
   const removeTagFromBlock = async (block: StoredBlock, tag: string) => {
-    const stripped = stripHashtagsFromMarkdown(block.content, [tag]);
     await runWithUndo("Remove tag", async () => {
-      await saveSnapshot([asBlockInput(block, { content: stripped })], []);
+      await saveSnapshot(
+        [asBlockInput(block, { tags: block.tags.filter((t) => t !== tag) })],
+        [],
+      );
+    });
+  };
+
+  const togglePin = async (block: StoredBlock) => {
+    const next = !block.pinned;
+    await runWithUndo(next ? "Pin" : "Unpin", async () => {
+      await saveSnapshot(
+        [asBlockInput(block, { pinned: next })],
+        [],
+      );
     });
   };
 
@@ -883,7 +904,16 @@ export function CanvasFeed({
   const exportSelected = async () => {
     if (selected.size === 0) return;
     const selectedInOrder = sorted.filter((b) => selected.has(b.id));
-    const md = selectedInOrder.map((b) => b.content).join("\n\n");
+    // Tags now live in their own table — round-trip them back as a
+    // trailing `#tag #tag` line per block so the exported markdown
+    // stays readable and re-importable.
+    const md = selectedInOrder
+      .map((b) => {
+        if (b.tags.length === 0) return b.content;
+        const tagLine = b.tags.map((t) => `#${t}`).join(" ");
+        return b.content ? `${b.content}\n\n${tagLine}` : tagLine;
+      })
+      .join("\n\n");
     const stamp = new Date().toISOString().slice(0, 10);
     const defaultName = tagFilter
       ? `mochi-${tagFilter}-${stamp}.md`
@@ -900,13 +930,13 @@ export function CanvasFeed({
     if (!tagFilter || selected.size === 0) return;
     await runWithUndo("Remove tag", async () => {
       const updates: BlockInput[] = sorted
-        .filter((b) => selected.has(b.id))
+        .filter((b) => selected.has(b.id) && b.tags.includes(tagFilter))
         .map((b) =>
           asBlockInput(b, {
-            content: stripHashtagsFromMarkdown(b.content, [tagFilter]),
+            tags: b.tags.filter((t) => t !== tagFilter),
           }),
         );
-      await saveSnapshot(updates, []);
+      if (updates.length > 0) await saveSnapshot(updates, []);
     });
     setSelected(new Set());
   };
@@ -918,13 +948,7 @@ export function CanvasFeed({
     await runWithUndo("Add tag", async () => {
       const updates: BlockInput[] = sorted
         .filter((b) => selected.has(b.id) && !b.tags.includes(t))
-        .map((b) => {
-          const trimmed = b.content.replace(/\s+$/, "");
-          const newContent = trimmed
-            ? `${trimmed}\n\n#${t}`
-            : `#${t}`;
-          return asBlockInput(b, { content: newContent });
-        });
+        .map((b) => asBlockInput(b, { tags: [...b.tags, t] }));
       if (updates.length > 0) await saveSnapshot(updates, []);
     });
   };
@@ -935,9 +959,7 @@ export function CanvasFeed({
       const updates: BlockInput[] = sorted
         .filter((b) => selected.has(b.id) && b.tags.includes(tag))
         .map((b) =>
-          asBlockInput(b, {
-            content: stripHashtagsFromMarkdown(b.content, [tag]),
-          }),
+          asBlockInput(b, { tags: b.tags.filter((t) => t !== tag) }),
         );
       if (updates.length > 0) await saveSnapshot(updates, []);
     });
@@ -1136,7 +1158,7 @@ export function CanvasFeed({
               ? "searching…"
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
-          <div className="ml-auto inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
+          <div className="mochi-sort-toggle ml-auto inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
             {(["canvas", "newest", "oldest"] as const).map((m) => (
               <button
                 key={m}
@@ -1165,6 +1187,14 @@ export function CanvasFeed({
               className="text-xs text-blue-700 dark:text-blue-300 hover:underline"
             >
               clear
+            </button>
+            <button
+              onClick={() => setSelected(new Set(sorted.map((b) => b.id)))}
+              disabled={selected.size === sorted.length}
+              title="Select every visible block"
+              className="inline-flex items-center gap-1 text-xs text-blue-700 dark:text-blue-300 hover:underline disabled:opacity-50 disabled:no-underline"
+            >
+              <CheckSquare size={12} /> select all ({sorted.length})
             </button>
             <div className="ml-auto flex items-center gap-2 flex-wrap">
               <ToolbarBtn
@@ -1282,6 +1312,7 @@ export function CanvasFeed({
                 onAddTag={(t) => addTagToBlock(b, t)}
                 onRemoveTag={(t) => removeTagFromBlock(b, t)}
                 onToggleSelect={(shiftKey) => toggleSelect(b.id, shiftKey)}
+                onTogglePin={() => togglePin(b)}
                 onExpand={() => setExpandedId(b.id)}
                 onSplitAtCursor={(ed) => splitBlockAtCursor(b, ed)}
               />
@@ -1351,6 +1382,7 @@ interface CardProps {
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
   onToggleSelect: (shiftKey: boolean) => void;
+  onTogglePin: () => void;
   onExpand: () => void;
   onSplitAtCursor: (editor: Editor) => void;
 }
@@ -1374,6 +1406,7 @@ const FeedCard = memo(
     onAddTag,
     onRemoveTag,
     onToggleSelect,
+    onTogglePin,
     onExpand,
     onSplitAtCursor,
   }: CardProps) {
@@ -1509,6 +1542,25 @@ const FeedCard = memo(
             {relativeTime(block.updated_at)}
           </span>
           <div className="flex items-center gap-0.5 text-neutral-400 shrink-0">
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePin();
+              }}
+              title={block.pinned ? "Unpin from top" : "Pin to top"}
+              className={`p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
+                block.pinned
+                  ? "text-blue-600 dark:text-blue-400"
+                  : "hover:text-neutral-700 dark:hover:text-neutral-200"
+              }`}
+            >
+              <Pin
+                size={13}
+                fill={block.pinned ? "currentColor" : "none"}
+              />
+            </button>
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
@@ -1720,6 +1772,7 @@ function EditableBody({
 }) {
   const tags = useWorkspace((s) => s.tags);
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
+  const runWithUndoStore = useWorkspace((s) => s.runWithUndo);
   const tagsRef = useRef(tags);
   useEffect(() => {
     tagsRef.current = tags;
@@ -1733,6 +1786,16 @@ function EditableBody({
   useEffect(() => {
     saveSnapshotRef.current = saveSnapshot;
   }, [saveSnapshot]);
+  const runWithUndoRef = useRef(runWithUndoStore);
+  useEffect(() => {
+    runWithUndoRef.current = runWithUndoStore;
+  }, [runWithUndoStore]);
+  // True iff the most recent doc change for this editor was a hashtag
+  // lift. While true, in-editor Cmd-Z removes the lifted chip via the
+  // workspace undo stack instead of running Tiptap's text undo. Any
+  // non-lift content change clears the flag, so subsequent Cmd-Z
+  // returns to normal text-undo behavior.
+  const lastActionWasLiftRef = useRef(false);
 
   const onMergeUpRef = useRef(onMergeUp);
   const onFocusNeighborRef = useRef(onFocusNeighbor);
@@ -1769,6 +1832,55 @@ function EditableBody({
     [],
   );
 
+  // Pull `#tag<terminator>` patterns out of the editor and into the
+  // block's tags field — same chip-lift UX as ChatBox, kept in sync
+  // here so the user sees the hashtag disappear the moment they type
+  // space / comma / newline after it. Returns the list of newly
+  // lifted tag names (lowercased, deduped against existing).
+  const liftHashtagsFromEditor = (ed: Editor, existingTags: string[]): string[] => {
+    const { doc, selection } = ed.state;
+    const cursorPos = selection.head;
+    const ranges: { from: number; to: number; tag: string }[] = [];
+    doc.descendants((node, pos, parent) => {
+      if (!node.isText || !node.text) return;
+      if (
+        parent &&
+        (parent.type.name === "codeBlock" || parent.type.name === "code")
+      ) {
+        return;
+      }
+      if (node.marks.some((m) => m.type.name === "code")) return;
+      const re = /(^|[\s])#([A-Za-z][A-Za-z0-9_\-/]*)([\s,])/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(node.text)) !== null) {
+        const hashAt = pos + m.index + m[1].length;
+        const tagEnd = hashAt + 1 + m[2].length;
+        // Don't lift while the cursor is still inside the tag token.
+        if (cursorPos > hashAt && cursorPos <= tagEnd) continue;
+        ranges.push({ from: hashAt, to: tagEnd + 1, tag: m[2].toLowerCase() });
+      }
+    });
+    if (ranges.length === 0) return [];
+    const existingSet = new Set(existingTags);
+    const lifted: string[] = [];
+    for (const r of ranges) {
+      if (!existingSet.has(r.tag) && !lifted.includes(r.tag)) lifted.push(r.tag);
+    }
+    // Apply deletions in reverse so earlier positions stay valid.
+    // `addToHistory: false` keeps the strip out of Tiptap's local
+    // undo stack — otherwise Cmd-Z would reverse just the PM delete
+    // and the next onUpdate would re-lift the tag, looping. The
+    // strip is registered on the workspace undo stack instead (see
+    // the runWithUndo wrap in onUpdate); Cmd-Z inside the editor
+    // falls through to the user's previous typing step.
+    ranges.sort((a, b) => b.from - a.from);
+    let tr = ed.state.tr;
+    for (const r of ranges) tr = tr.delete(r.from, r.to);
+    tr = tr.setMeta("addToHistory", false);
+    ed.view.dispatch(tr);
+    return lifted;
+  };
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -1790,7 +1902,6 @@ function EditableBody({
       Hashtag.configure({
         getTags: () => tagsRef.current.map((t) => t.tag),
       }),
-      HashtagHidePerCard,
       SearchHighlightPerCard,
       SlashMenu,
       CrossBlockNav.configure({
@@ -1807,10 +1918,72 @@ function EditableBody({
     // first-rendered card. Focus is delivered explicitly via the
     // pendingFocus dispatch below when a structural action wants it.
     autofocus: false,
+    editorProps: {
+      handleKeyDown(_view, event) {
+        // Intercept Mod-Z when the most recent action was a hashtag
+        // lift — pop that lift off the workspace undo stack instead
+        // of running Tiptap's text undo. The lifted hashtag text is
+        // NOT restored to the editor body (avoids a re-lift loop on
+        // the next keystroke); only the chip is removed.
+        const mod = event.metaKey || event.ctrlKey;
+        if (
+          mod &&
+          event.key.toLowerCase() === "z" &&
+          !event.shiftKey &&
+          lastActionWasLiftRef.current
+        ) {
+          event.preventDefault();
+          lastActionWasLiftRef.current = false;
+          // Cancel any in-flight debounced save first — undoLast
+          // restores prior state directly; we don't want a stale
+          // post-undo save clobbering it.
+          saveDebounced.cancel();
+          void useWorkspace.getState().undoLast();
+          return true;
+        }
+        return false;
+      },
+    },
     onUpdate: ({ editor }) => {
-      // Don't fire saves while the user is mid-tag (cursor inside a
-      // `#tag` range). Otherwise a 300ms pause after `#q` lands a
-      // partial `q` tag in blocks.tags.
+      // Lift any `#tag<space|comma|newline>` out of the body into the
+      // block's tags field. Dispatches its own PM transaction (delete
+      // the token range) so the visible text strips immediately. When
+      // a lift happens, fire an authoritative save right away with
+      // the merged tag set — the debounced path would race with the
+      // next keystroke and could re-introduce the tag from prior state.
+      const b = blockRef.current;
+      const lifted = liftHashtagsFromEditor(editor, b.tags);
+      if (lifted.length > 0) {
+        saveDebounced.cancel();
+        const md: string = (editor.storage as any).markdown.getMarkdown();
+        const cleaned = unescapeInlineHashtags(md);
+        const { heading, level } = deriveHeading(cleaned);
+        const label = lifted.length === 1 ? `Lift #${lifted[0]}` : "Lift tags";
+        void runWithUndoRef.current(label, async () => {
+          await saveSnapshotRef.current(
+            [
+              {
+                id: b.id,
+                content: cleaned,
+                position: b.position,
+                parent_id: b.parent_id,
+                heading,
+                heading_level: level,
+                tags: [...b.tags, ...lifted],
+              },
+            ],
+            [],
+          );
+        });
+        lastActionWasLiftRef.current = true;
+        return;
+      }
+      // Any non-lift content change clears the lift-undo flag, so
+      // the next Cmd-Z falls through to normal text undo.
+      lastActionWasLiftRef.current = false;
+      // Don't fire debounced saves while the user is mid-tag (cursor
+      // inside an in-progress `#tag` range with no terminator yet) —
+      // otherwise a 300ms pause after `#q` would commit `q` as a tag.
       if (cursorInsideHashtag(editor)) {
         saveDebounced.cancel();
         return;
@@ -1935,36 +2108,25 @@ function TagChipStrip({
 }
 
 /**
- * Per-card hashtag hider. Walks the doc on every change, wraps each
- * `#tag` text range in `.mochi-tag` so the global CSS rule
- * (`.mochi-block-card .ProseMirror .mochi-tag { display: none }`)
- * removes it visually. The original `HashtagHighlight` extension only
- * scans `mochiBlock` children, which the per-card editor doesn't have —
- * this strips that wrapper-node assumption out.
+ * Detects whether the editor's cursor sits inside an in-progress
+ * `#hashtag` token. Used to defer saves while the user is mid-typing
+ * a tag — otherwise a brief pause after `#q` would land a partial
+ * `q` tag in the block's tag set (and then `qw`, `qwe`, …). When the
+ * user finishes the tag (space/blur/cursor-leaves), saves resume
+ * normally and the full tag is captured.
  *
- * Each editor has one block's worth of content, so a full doc walk on
- * every transaction is cheap (no need for the incremental machinery in
- * the original).
+ * Pure text scan — no decoration / hide pass (hashtags are visible
+ * in the editor while typing; they're stripped from content at save
+ * time by the Rust `parser::strip_inline_hashtags`).
  */
 const HASHTAG_RE_PER_CARD = /(^|\s)(#[A-Za-z][A-Za-z0-9_\-/]*)/g;
 
-/**
- * Walk the doc and return:
- *   - decos: the hide-decoration set, EXCLUDING any hashtag the
- *     cursor is currently inside (so the user can see what they're
- *     typing while building a tag)
- *   - cursorInsideHashtag: whether the cursor sits inside a tag
- *     range — surfaced separately so saveDebounced can skip the
- *     save and avoid creating a partial `q` tag when the user
- *     paused mid-word.
- */
-function buildHashtagHideDecos(
-  doc: PMNode,
-  cursorPos: number,
-): { decos: DecorationSet; cursorInsideHashtag: boolean } {
-  const decos: Decoration[] = [];
-  let cursorInside = false;
+function cursorInsideHashtag(editor: Editor): boolean {
+  const { doc, selection } = editor.state;
+  const cursorPos = selection.head;
+  let inside = false;
   doc.descendants((node, pos, parent) => {
+    if (inside) return false;
     if (!node.isText || !node.text) return;
     if (
       parent &&
@@ -1976,75 +2138,18 @@ function buildHashtagHideDecos(
     HASHTAG_RE_PER_CARD.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = HASHTAG_RE_PER_CARD.exec(node.text)) !== null) {
-      // Cover the leading whitespace (m[1]) AND the tag (m[2]) so the
-      // hidden span doesn't leave a phantom space where a read-only
-      // strip would have collapsed it.
-      const wholeStart = pos + m.index;
-      const wholeEnd = wholeStart + m[0].length;
-      // Tag-text range (excluding the leading whitespace) is what
-      // counts for "cursor inside this hashtag" — typing inside the
-      // `#xxx` should keep it visible; clicking on the space before
-      // it shouldn't.
+      // Tag-text range starts AFTER the leading whitespace (group 1):
+      // typing inside `#xxx` is "in-progress"; clicking on the space
+      // before it is not.
       const tagStart = pos + m.index + m[1].length;
-      if (cursorPos >= tagStart && cursorPos <= wholeEnd) {
-        cursorInside = true;
-        continue; // don't hide an in-progress tag
+      const tagEnd = pos + m.index + m[0].length;
+      if (cursorPos >= tagStart && cursorPos <= tagEnd) {
+        inside = true;
+        return false;
       }
-      decos.push(Decoration.inline(wholeStart, wholeEnd, { class: "mochi-tag" }));
     }
   });
-  return {
-    decos: decos.length > 0 ? DecorationSet.create(doc, decos) : DecorationSet.empty,
-    cursorInsideHashtag: cursorInside,
-  };
-}
-
-interface HashtagHideState {
-  decos: DecorationSet;
-  cursorInsideHashtag: boolean;
-}
-
-const hashtagHideKey = new PluginKey<HashtagHideState>("hashtagHidePerCard");
-
-const HashtagHidePerCard = Extension.create({
-  name: "hashtagHidePerCard",
-  addProseMirrorPlugins() {
-    return [
-      new Plugin<HashtagHideState>({
-        key: hashtagHideKey,
-        state: {
-          init: (_, state) =>
-            buildHashtagHideDecos(state.doc, state.selection.head),
-          apply: (tr, prev, oldState, newState) => {
-            // Re-run on doc changes AND on selection moves — moving
-            // the cursor out of a tag should flip its hide state.
-            if (
-              !tr.docChanged &&
-              oldState.selection.head === newState.selection.head
-            ) {
-              return prev;
-            }
-            return buildHashtagHideDecos(
-              newState.doc,
-              newState.selection.head,
-            );
-          },
-        },
-        props: {
-          decorations(state) {
-            return hashtagHideKey.getState(state)?.decos;
-          },
-        },
-      }),
-    ];
-  },
-});
-
-/** Read the "is the cursor inside a hashtag" flag from the editor's
- *  HashtagHidePerCard plugin state. */
-function cursorInsideHashtag(editor: Editor): boolean {
-  const s = hashtagHideKey.getState(editor.state);
-  return s?.cursorInsideHashtag ?? false;
+  return inside;
 }
 
 /**
@@ -2460,52 +2565,6 @@ const CrossBlockNav = Extension.create<CrossBlockNavOptions>({
 });
 
 /**
- * Remove every inline occurrence of `#tag` (for tags the parser already
- * extracted) from a markdown source string, so the rendered read-only
- * card shows only the prose — tags live in the chip strip up top.
- *
- * Skips fenced code blocks (`extractInlineTags` does the same). Cleans
- * up the whitespace that the removal leaves behind: collapses doubled
- * spaces, trims line-end spaces, and squashes runs of blank lines that
- * would otherwise appear where a tag was the only content on its line.
- */
-function stripHashtagsFromMarkdown(md: string, tags: string[]): string {
-  if (tags.length === 0) return md;
-  const lines = md.split("\n");
-  const out: string[] = [];
-  let inFence = false;
-  for (const line of lines) {
-    if (line.trim().startsWith("```")) {
-      inFence = !inFence;
-      out.push(line);
-      continue;
-    }
-    if (inFence) {
-      out.push(line);
-      continue;
-    }
-    let cleaned = line;
-    for (const tag of tags) {
-      const re = new RegExp(
-        `(^|\\s)#${escapeRegex(tag)}(?![A-Za-z0-9_\\-/])`,
-        "gi",
-      );
-      cleaned = cleaned.replace(re, "$1");
-    }
-    out.push(cleaned.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+$/, ""));
-  }
-  return out
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "");
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
  * Compact popover that lists tags to pick from. Used in the bulk-action
  * toolbar for "Add tag…" (lists every workspace tag + allows creating
  * a new one) and "Remove tag…" (lists only the intersection of tags
@@ -2772,7 +2831,7 @@ function splitContentIntoChunks(content: string): string[] {
 }
 
 function asBlockInput(b: StoredBlock, override?: Partial<BlockInput>): BlockInput {
-  return {
+  const out: BlockInput = {
     id: b.id,
     content: override?.content ?? b.content,
     position: override?.position ?? b.position,
@@ -2780,6 +2839,12 @@ function asBlockInput(b: StoredBlock, override?: Partial<BlockInput>): BlockInpu
     heading: override?.heading ?? b.heading,
     heading_level: override?.heading_level ?? b.heading_level,
   };
+  // Only forward `tags` / `pinned` when the caller explicitly passed them.
+  // Omitting from BlockInput tells the backend to preserve prior state for
+  // those fields — important for pure-position reorders / structural edits.
+  if (override && "tags" in override) out.tags = override.tags;
+  if (override && "pinned" in override) out.pinned = override.pinned;
+  return out;
 }
 
 /**
@@ -2958,7 +3023,6 @@ function ExpandedBlockEditor({
       Hashtag.configure({
         getTags: () => tagsRef.current.map((t) => t.tag),
       }),
-      HashtagHidePerCard,
       SlashMenu,
     ],
     content: block?.content ?? "",

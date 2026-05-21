@@ -10,10 +10,11 @@ interface Props {
 }
 
 /**
- * Modal: delete a tag with two semantics. "Strip" rewrites every block
- * to remove the inline `#tag` text (blocks stay, content changes).
- * "Delete blocks" removes every block that carries the tag. Both also
- * drop the tag_metadata row.
+ * Modal: delete a tag with two semantics. "Strip" detaches the tag
+ * from every block it's on (blocks stay, content untouched — tags
+ * live in their own table now, not in block content). "Delete blocks"
+ * removes every block that carries the tag. Both also drop the
+ * tag's row from the `tags` table.
  */
 export function TagDeleteModal({ tag, onClose, onConfirmed }: Props) {
   const [pending, setPending] = useState<"strip" | "delete_blocks" | null>(null);
@@ -60,7 +61,7 @@ export function TagDeleteModal({ tag, onClose, onConfirmed }: Props) {
         <div className="px-4 pb-4 grid gap-2">
           <ActionCard
             title={`Remove tag from ${tag.count} block${tag.count === 1 ? "" : "s"}`}
-            desc="Blocks keep their content; only the inline `#tag` text is stripped. The tag disappears once no block carries it."
+            desc="Blocks keep their content unchanged; the tag is simply detached from each of them. The tag is removed from the workspace."
             cta="Remove tag"
             disabled={pending !== null}
             loading={pending === "strip"}
