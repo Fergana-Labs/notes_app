@@ -1588,6 +1588,18 @@ const FeedCard = memo(
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              title="Delete block"
+              className="p-1 rounded text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              <Trash2 size={13} />
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={openMenu}
               title="More actions"
               className="p-1 rounded hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
