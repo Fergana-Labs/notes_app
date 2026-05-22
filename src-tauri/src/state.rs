@@ -137,6 +137,7 @@ impl AppState {
                         heading_level: b.heading_level,
                         tags: None,
                         pinned: None,
+                        title: None,
                     })
                     .collect();
                 if !inputs.is_empty() {
@@ -205,6 +206,7 @@ impl AppState {
                 heading_level: *heading_level,
                 tags: None,
                 pinned: None,
+                title: None,
             });
         }
         db::save_snapshot(conn, &blocks, &[], "seed")?;

@@ -46,6 +46,10 @@ function snapshotBlocks(blocks: StoredBlock[]): BlockInput[] {
     heading_level: b.heading_level,
     tags: b.tags,
     pinned: b.pinned,
+    // Send the literal title back (empty string ↔ NULL clearing
+    // via the BlockInput contract). undoLast wants to restore the
+    // exact state, so an unset title needs an explicit "" to clear.
+    title: b.title ?? "",
   }));
 }
 
@@ -145,6 +149,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
             heading_level: inp.heading_level ?? null,
             tags: sv.tags,
             pinned: sv.pinned,
+            title: sv.title,
             updated_at: sv.updated_at,
           });
           seen.add(existing.id);
@@ -167,6 +172,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           content_hash: sv.content_hash,
           tags: sv.tags,
           pinned: sv.pinned,
+          title: sv.title,
           created_at: now,
           updated_at: sv.updated_at,
         });

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS blocks (
   content TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   pinned INTEGER NOT NULL DEFAULT 0,
+  title TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -90,6 +91,10 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     // `pinned` column for some reason). ALTER TABLE silently no-ops
     // on duplicate column.
     add_column_if_missing(&conn, "blocks", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+    // `title` is an optional per-block label shown in the card header.
+    // Stored as NULL until the user sets one. Idempotent for existing
+    // workspaces.
+    add_column_if_missing(&conn, "blocks", "title", "TEXT")?;
     Ok(conn)
 }
 
@@ -125,6 +130,9 @@ pub struct StoredBlock {
     pub content_hash: String,
     pub tags: Vec<String>,
     pub pinned: bool,
+    /// Optional user-set title surfaced in the card header. Null when
+    /// the block has no title — most blocks won't.
+    pub title: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -148,6 +156,12 @@ pub struct BlockInput {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub pinned: Option<bool>,
+    /// Optional title overwrite. `None` preserves the prior value;
+    /// `Some("")` clears (sets NULL); `Some("Name")` sets the title.
+    /// Match the pin pattern: explicit means overwrite, missing means
+    /// preserve.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Read every block's joined tag list in one query. Returns a map from
@@ -175,7 +189,7 @@ fn fetch_block_tags(conn: &Connection) -> Result<std::collections::HashMap<Strin
 pub fn list_blocks(conn: &Connection) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
     let mut stmt = conn.prepare(
-        "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, created_at, updated_at FROM blocks ORDER BY position",
+        "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks ORDER BY position",
     )?;
     let rows = stmt
         .query_map([], |row| row_to_block(row, &tag_map))?
@@ -187,7 +201,7 @@ pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBloc
     let tag_map = fetch_block_tags(conn)?;
     let needle = tag.to_lowercase();
     let mut stmt = conn.prepare(
-        "SELECT b.id, b.parent_id, b.position, b.heading, b.heading_level, b.content, b.content_hash, b.pinned, b.created_at, b.updated_at
+        "SELECT b.id, b.parent_id, b.position, b.heading, b.heading_level, b.content, b.content_hash, b.pinned, b.title, b.created_at, b.updated_at
          FROM blocks b
          JOIN block_tags bt ON bt.block_id = b.id
          JOIN tags t ON t.id = bt.tag_id
@@ -483,6 +497,7 @@ pub struct SavedBlock {
     pub content_hash: String,
     pub tags: Vec<String>,
     pub pinned: bool,
+    pub title: Option<String>,
     pub updated_at: i64,
 }
 
@@ -518,11 +533,11 @@ pub fn save_snapshot(
     let mut saved: Vec<SavedBlock> = Vec::with_capacity(blocks.len());
 
     for b in blocks {
-        let prior: Option<(String, i64, i64)> = tx
+        let prior: Option<(String, i64, i64, Option<String>)> = tx
             .query_row(
-                "SELECT content_hash, created_at, pinned FROM blocks WHERE id = ?1",
+                "SELECT content_hash, created_at, pinned, title FROM blocks WHERE id = ?1",
                 params![b.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
 
@@ -534,12 +549,22 @@ pub fn save_snapshot(
 
         let pinned_val: i64 = match (b.pinned, &prior) {
             (Some(p), _) => if p { 1 } else { 0 },
-            (None, Some((_, _, prior_pinned))) => *prior_pinned,
+            (None, Some((_, _, prior_pinned, _))) => *prior_pinned,
             (None, None) => 0,
+        };
+        // Title: None on the input means "preserve prior"; Some("") clears
+        // the title (NULL); any other Some sets it.
+        let title_val: Option<String> = match (&b.title, &prior) {
+            (Some(s), _) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+            }
+            (None, Some((_, _, _, prior_title))) => prior_title.clone(),
+            (None, None) => None,
         };
 
         let (created_at, content_changed, parent_hash, prior_existed) = match &prior {
-            Some((prior_hash, created, _)) => {
+            Some((prior_hash, created, _, _)) => {
                 let changed_now = *prior_hash != new_hash;
                 (*created, changed_now, Some(prior_hash.clone()), true)
             }
@@ -547,8 +572,8 @@ pub fn save_snapshot(
         };
 
         tx.execute(
-            "INSERT INTO blocks(id, parent_id, position, heading, heading_level, content, content_hash, pinned, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO blocks(id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                parent_id=excluded.parent_id,
                position=excluded.position,
@@ -557,6 +582,7 @@ pub fn save_snapshot(
                content=excluded.content,
                content_hash=excluded.content_hash,
                pinned=excluded.pinned,
+               title=excluded.title,
                -- updated_at bumps ONLY when the content actually changed.
                -- Position / parent_id / heading_level / pinned changes
                -- are structural and shouldn't lie about when the user
@@ -572,6 +598,7 @@ pub fn save_snapshot(
                 stripped_content,
                 new_hash,
                 pinned_val,
+                title_val,
                 created_at,
                 now,
             ],
@@ -699,6 +726,7 @@ pub fn save_snapshot(
             content_hash: new_hash,
             tags: final_tag_names,
             pinned: pinned_val != 0,
+            title: title_val,
             updated_at,
         });
     }
@@ -958,11 +986,12 @@ pub fn heal_strip_inline_tags(conn: &mut Connection) -> Result<()> {
                content TEXT NOT NULL,
                content_hash TEXT NOT NULL,
                pinned INTEGER NOT NULL DEFAULT 0,
+               title TEXT,
                created_at INTEGER NOT NULL,
                updated_at INTEGER NOT NULL
              );
-             INSERT INTO blocks_new(id, parent_id, position, heading, heading_level, content, content_hash, pinned, created_at, updated_at)
-               SELECT id, parent_id, position, heading, heading_level, content, content_hash, COALESCE(pinned, 0), created_at, updated_at FROM blocks;
+             INSERT INTO blocks_new(id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at)
+               SELECT id, parent_id, position, heading, heading_level, content, content_hash, COALESCE(pinned, 0), NULL, created_at, updated_at FROM blocks;
              DROP TABLE blocks;
              ALTER TABLE blocks_new RENAME TO blocks;
              CREATE INDEX IF NOT EXISTS idx_blocks_position ON blocks(position);
@@ -1050,8 +1079,9 @@ fn row_to_block(
         content_hash: row.get(6)?,
         tags,
         pinned: pinned != 0,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        title: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 

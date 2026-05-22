@@ -14,6 +14,9 @@ export interface StoredBlock {
   tags: string[];
   /** Whether the user has pinned this block to the top of the feed. */
   pinned: boolean;
+  /** Optional user-set title shown in the card header. Null when the
+   *  block has no title. */
+  title: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -86,6 +89,9 @@ export interface BlockInput {
   tags?: string[];
   /** Pin state. When absent, the prior pin state is preserved. */
   pinned?: boolean;
+  /** Title overwrite. When absent the prior title is preserved.
+   *  Empty string clears the title (NULL). */
+  title?: string;
 }
 
 /** Canonical post-save state for a single block, returned from
@@ -98,6 +104,7 @@ export interface SavedBlock {
   content_hash: string;
   tags: string[];
   pinned: boolean;
+  title: string | null;
   updated_at: number;
 }
 

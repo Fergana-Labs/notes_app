@@ -97,6 +97,7 @@ function BlockViewInner(props: NodeViewProps) {
     content_hash: "",
     tags: Array.isArray(node.attrs.tags) ? node.attrs.tags : [],
     pinned: false,
+    title: null,
     created_at: 0,
     updated_at: 0,
   };

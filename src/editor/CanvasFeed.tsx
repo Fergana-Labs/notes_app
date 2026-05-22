@@ -804,6 +804,17 @@ export function CanvasFeed({
     });
   };
 
+  const setTitle = async (block: StoredBlock, raw: string) => {
+    const t = raw.trim();
+    if ((block.title ?? "") === t) return;
+    await runWithUndo(t ? "Set title" : "Clear title", async () => {
+      await saveSnapshot(
+        [asBlockInput(block, { title: t })],
+        [],
+      );
+    });
+  };
+
   /**
    * Apply an editorless block-type transform — used when the user picks
    * "Turn into" on a non-mounted card. Mirrors what `BLOCK_TYPES[i].apply`
@@ -1375,6 +1386,7 @@ export function CanvasFeed({
                 onRemoveTag={(t) => removeTagFromBlock(b, t)}
                 onToggleSelect={(shiftKey) => toggleSelect(b.id, shiftKey)}
                 onTogglePin={() => togglePin(b)}
+                onSetTitle={(t) => setTitle(b, t)}
                 onExpand={() => setExpandedId(b.id)}
                 onSplitAtCursor={(ed) => splitBlockAtCursor(b, ed)}
               />
@@ -1452,6 +1464,7 @@ interface CardProps {
   onRemoveTag: (tag: string) => void;
   onToggleSelect: (shiftKey: boolean) => void;
   onTogglePin: () => void;
+  onSetTitle: (title: string) => void;
   onExpand: () => void;
   onSplitAtCursor: (editor: Editor) => void;
 }
@@ -1476,6 +1489,7 @@ const FeedCard = memo(
     onRemoveTag,
     onToggleSelect,
     onTogglePin,
+    onSetTitle,
     onExpand,
     onSplitAtCursor,
   }: CardProps) {
@@ -1598,6 +1612,7 @@ const FeedCard = memo(
             className="cursor-pointer shrink-0"
             title="Select (shift-click to range-select)"
           />
+          <BlockTitleField title={block.title} onCommit={onSetTitle} />
           <TagChipStrip
             tags={block.tags}
             showAdder
@@ -1825,6 +1840,48 @@ const FeedCard = memo(
     prev.highlightCaseSensitive === next.highlightCaseSensitive &&
     prev.isActiveSearchHit === next.isActiveSearchHit,
 );
+
+/**
+ * Editable title field for a block. Renders as an unstyled inline
+ * input — placeholder is "Untitled" when the value is empty. Commits
+ * on blur or Enter; Escape reverts to the last persisted title.
+ */
+function BlockTitleField({
+  title,
+  onCommit,
+}: {
+  title: string | null;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState<string>(title ?? "");
+  useEffect(() => {
+    setDraft(title ?? "");
+  }, [title]);
+  return (
+    <input
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => {
+        if (draft !== (title ?? "")) onCommit(draft);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setDraft(title ?? "");
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      placeholder="Untitled"
+      className="shrink-0 min-w-0 w-32 max-w-[14rem] bg-transparent outline-none border-b border-transparent focus:border-neutral-300 dark:focus:border-neutral-700 text-xs font-medium text-neutral-700 dark:text-neutral-200 placeholder:text-neutral-400 placeholder:italic placeholder:font-normal"
+      title={title ? `Title: ${title}` : "Set a title for this block"}
+    />
+  );
+}
 
 function EditableBody({
   block,
@@ -2910,11 +2967,13 @@ function asBlockInput(b: StoredBlock, override?: Partial<BlockInput>): BlockInpu
     heading: override?.heading ?? b.heading,
     heading_level: override?.heading_level ?? b.heading_level,
   };
-  // Only forward `tags` / `pinned` when the caller explicitly passed them.
-  // Omitting from BlockInput tells the backend to preserve prior state for
-  // those fields — important for pure-position reorders / structural edits.
+  // Only forward `tags` / `pinned` / `title` when the caller explicitly
+  // passed them. Omitting from BlockInput tells the backend to preserve
+  // prior state for those fields — important for pure-position reorders /
+  // structural edits.
   if (override && "tags" in override) out.tags = override.tags;
   if (override && "pinned" in override) out.pinned = override.pinned;
+  if (override && "title" in override) out.title = override.title;
   return out;
 }
 
@@ -3183,10 +3242,64 @@ function ExpandedBlockEditor({
           expect on a "page." Match Obsidian / Apple Notes feel. */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-10 pt-12 pb-32 text-base leading-relaxed mochi-expanded-editor">
+          <ExpandedTitleField
+            blockId={block.id}
+            initialTitle={block.title}
+          />
           <BlockBubbleMenu editor={editor} />
           <EditorContent editor={editor} />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Page-title-style title input for the fullscreen editor. Routes
+ * commits through saveSnapshot directly (rather than a prop callback)
+ * since ExpandedBlockEditor already owns its own save plumbing.
+ */
+function ExpandedTitleField({
+  blockId,
+  initialTitle,
+}: {
+  blockId: string;
+  initialTitle: string | null;
+}) {
+  const blocks = useWorkspace((s) => s.blocks);
+  const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
+  const runWithUndo = useWorkspace((s) => s.runWithUndo);
+  const [draft, setDraft] = useState<string>(initialTitle ?? "");
+  useEffect(() => {
+    setDraft(initialTitle ?? "");
+  }, [initialTitle]);
+  const commit = async () => {
+    const b = blocks.find((x) => x.id === blockId);
+    if (!b) return;
+    const t = draft.trim();
+    if ((b.title ?? "") === t) return;
+    await runWithUndo(t ? "Set title" : "Clear title", async () => {
+      await saveSnapshot([asBlockInput(b, { title: t })], []);
+    });
+  };
+  return (
+    <input
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setDraft(initialTitle ?? "");
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      placeholder="Untitled"
+      className="w-full mb-6 bg-transparent outline-none border-none text-3xl font-bold text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 placeholder:italic placeholder:font-normal"
+    />
   );
 }
