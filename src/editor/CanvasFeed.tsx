@@ -713,7 +713,10 @@ export function CanvasFeed({
     const splitIdx = Math.min(beforeClean.length, cleaned.length);
     const left = cleaned.slice(0, splitIdx).trimEnd();
     const right = cleaned.slice(splitIdx).trimStart();
-    if (!right) return; // Nothing to split; no-op.
+    // Cmd-Enter at the very end of a block still creates a fresh empty
+    // block directly below (the user's mental model: "make a new block
+    // here"). When there IS content after the cursor, the right half
+    // lands in the new block. Either way, mint a successor.
 
     const all = canvasRef.current;
     const idx = all.findIndex((b) => b.id === block.id);
@@ -741,9 +744,12 @@ export function CanvasFeed({
         parent_id: block.parent_id,
         heading: null,
         heading_level: null,
-        // The new half inherits the source block's tag set so the user
-        // doesn't lose the tag context they were writing under.
+        // The new half inherits the source block's tag set, pin scopes,
+        // and title so the split feels like "another piece of the same
+        // thing" rather than a fresh untagged block.
         tags: block.tags,
+        pinned_scopes: block.pinned_scopes,
+        title: block.title ?? "",
       });
       await saveSnapshot(recomputeParentIds(updates), []);
     });
@@ -3306,9 +3312,13 @@ function ExpandedBlockEditor({
             <button
               key={t}
               type="button"
-              onClick={() => onSelectTag?.(t)}
-              title={`Open #${t}`}
-              className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium hover:bg-blue-100 dark:hover:bg-blue-900/50 cursor-pointer"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTag?.(t);
+              }}
+              title={`Open #${t} (exits fullscreen)`}
+              className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-medium hover:bg-blue-200 dark:hover:bg-blue-900/70 cursor-pointer ring-1 ring-blue-200 dark:ring-blue-800"
             >
               #{t}
             </button>
