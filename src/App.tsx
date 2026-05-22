@@ -196,6 +196,11 @@ export default function App() {
             activeSearchId={searchActiveId}
             tagFilter={tagFilter}
             onClearTagFilter={() => setTagFilter(null)}
+            onSelectTag={(tag) => {
+              setTagFilter(tag);
+              setSearchActiveId(null);
+              setFocusedBlockId(null);
+            }}
             focusedBlockId={focusedBlockId}
             onClearFocusedBlock={() => {
               setFocusedBlockId(null);

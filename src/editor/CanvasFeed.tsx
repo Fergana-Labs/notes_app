@@ -291,6 +291,9 @@ interface Props {
   tagFilter?: string | null;
   /** Clear-handler for the tag filter chip up top. */
   onClearTagFilter?: () => void;
+  /** Set the active tag filter. Used by the fullscreen editor to route
+   *  a tag-chip click back up to App-level state. */
+  onSelectTag?: (tag: string) => void;
   /** When set, narrow the feed to ONLY this single block (used by
    *  sidebar search-result clicks). */
   focusedBlockId?: string | null;
@@ -325,6 +328,7 @@ export function CanvasFeed({
   activeSearchId,
   tagFilter = null,
   onClearTagFilter,
+  onSelectTag,
   focusedBlockId = null,
   onClearFocusedBlock,
   caseSensitive = false,
@@ -1357,6 +1361,13 @@ export function CanvasFeed({
       <ExpandedBlockEditor
         blockId={expandedId}
         onClose={() => setExpandedId(null)}
+        onSelectTag={(t) => {
+          // Tag clicks in fullscreen drop the user back into the feed
+          // already filtered by the chosen tag. Close first so the
+          // App-level state update lands on a remounted feed.
+          setExpandedId(null);
+          onSelectTag?.(t);
+        }}
       />
     )}
     </>
@@ -2952,9 +2963,11 @@ function stripBlockPrefix(content: string): string {
 function ExpandedBlockEditor({
   blockId,
   onClose,
+  onSelectTag,
 }: {
   blockId: string;
   onClose: () => void;
+  onSelectTag?: (tag: string) => void;
 }) {
   const block = useWorkspace((s) =>
     s.blocks.find((b) => b.id === blockId) ?? null,
@@ -3087,12 +3100,15 @@ function ExpandedBlockEditor({
         </button>
         <div className="flex items-center gap-2 flex-1 mx-4 justify-end overflow-hidden">
           {block.tags.map((t) => (
-            <span
+            <button
               key={t}
-              className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium"
+              type="button"
+              onClick={() => onSelectTag?.(t)}
+              title={`Open #${t}`}
+              className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs font-medium hover:bg-blue-100 dark:hover:bg-blue-900/50 cursor-pointer"
             >
               #{t}
-            </span>
+            </button>
           ))}
           <span className="font-mono text-xs text-neutral-400 ml-2 shrink-0">
             {block.id.slice(-8)}
