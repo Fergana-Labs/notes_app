@@ -688,6 +688,9 @@ export function CanvasFeed({
         parent_id: block.parent_id,
         heading: null,
         heading_level: null,
+        // The new half inherits the source block's tag set so the user
+        // doesn't lose the tag context they were writing under.
+        tags: block.tags,
       });
       await saveSnapshot(recomputeParentIds(updates), []);
     });
@@ -890,6 +893,9 @@ export function CanvasFeed({
               parent_id: b.parent_id,
               heading: null,
               heading_level: null,
+              // Carry the source block's tags onto each split chunk — same
+              // rationale as the cmd-enter split in splitBlockAtCursor.
+              tags: b.tags,
             });
           }
         } else {
