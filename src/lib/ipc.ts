@@ -12,8 +12,9 @@ export interface StoredBlock {
    *  from the normalized `tags` + `block_tags` tables; not stored on
    *  the block row itself. */
   tags: string[];
-  /** Whether the user has pinned this block to the top of the feed. */
-  pinned: boolean;
+  /** Scopes in which the block is pinned. Empty string means the
+   *  global "All blocks" view; any other value is a tag name. */
+  pinned_scopes: string[];
   /** Optional user-set title shown in the card header. Null when the
    *  block has no title. */
   title: string | null;
@@ -87,8 +88,10 @@ export interface BlockInput {
    *  set. When absent, the prior tag set is preserved (purely
    *  structural saves don't touch tags). */
   tags?: string[];
-  /** Pin state. When absent, the prior pin state is preserved. */
-  pinned?: boolean;
+  /** Pin scope set. When absent, the prior set is preserved. When
+   *  present, the entire set is replaced (pass an empty array to
+   *  unpin everywhere). Empty string in the array = global pin. */
+  pinned_scopes?: string[];
   /** Title overwrite. When absent the prior title is preserved.
    *  Empty string clears the title (NULL). */
   title?: string;
@@ -103,7 +106,7 @@ export interface SavedBlock {
   content: string;
   content_hash: string;
   tags: string[];
-  pinned: boolean;
+  pinned_scopes: string[];
   title: string | null;
   updated_at: number;
 }

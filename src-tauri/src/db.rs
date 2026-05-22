@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS block_tags (
   FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_block_tags_tag ON block_tags(tag_id);
+
+-- Per-scope pins. `scope` is the empty string for the global "All blocks"
+-- view, or a tag name to pin only within that tag's filtered view. A
+-- block may have multiple rows (e.g. pinned globally AND in #ideas).
+CREATE TABLE IF NOT EXISTS block_pins (
+  block_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (block_id, scope),
+  FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_block_pins_scope ON block_pins(scope);
 "#;
 
 pub fn open(workspace: &Path) -> Result<Connection> {
@@ -95,6 +106,31 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     // Stored as NULL until the user sets one. Idempotent for existing
     // workspaces.
     add_column_if_missing(&conn, "blocks", "title", "TEXT")?;
+    // One-shot copy of legacy `blocks.pinned = 1` rows into the
+    // scoped `block_pins` table (with scope = '' meaning "global /
+    // All view"). Gated by a settings flag so it only runs once per
+    // workspace. INSERT OR IGNORE makes the SQL itself idempotent,
+    // but the flag keeps the per-open cost at one cheap settings
+    // lookup.
+    let migrated: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'pins_scoped_migration'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?;
+    if migrated.as_deref() != Some("true") {
+        conn.execute(
+            "INSERT OR IGNORE INTO block_pins(block_id, scope)
+             SELECT id, '' FROM blocks WHERE pinned = 1",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('pins_scoped_migration', 'true')
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [],
+        )?;
+    }
     Ok(conn)
 }
 
@@ -129,7 +165,10 @@ pub struct StoredBlock {
     pub content: String,
     pub content_hash: String,
     pub tags: Vec<String>,
-    pub pinned: bool,
+    /// Scopes in which the block is pinned. Empty string means the
+    /// global "All blocks" view; any other value is a tag name. A
+    /// block may be pinned in multiple scopes simultaneously.
+    pub pinned_scopes: Vec<String>,
     /// Optional user-set title surfaced in the card header. Null when
     /// the block has no title — most blocks won't.
     pub title: Option<String>,
@@ -154,14 +193,41 @@ pub struct BlockInput {
     pub heading_level: Option<u8>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+    /// Explicit overwrite of the scope-pin set for this block. `None`
+    /// preserves the prior set (structural saves should leave pins
+    /// alone); `Some(vec)` REPLACES the entire pin set — including
+    /// `Some(vec![])` which unpins everywhere.
     #[serde(default)]
-    pub pinned: Option<bool>,
+    pub pinned_scopes: Option<Vec<String>>,
     /// Optional title overwrite. `None` preserves the prior value;
     /// `Some("")` clears (sets NULL); `Some("Name")` sets the title.
     /// Match the pin pattern: explicit means overwrite, missing means
     /// preserve.
     #[serde(default)]
     pub title: Option<String>,
+}
+
+/// Read every block's pin scopes in one query. Returns a map from
+/// block_id → list of scope strings. Empty string in the list means
+/// "pinned in the global / All blocks view." Used by list_blocks to
+/// avoid an N+1 per-block join.
+fn fetch_block_pin_scopes(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let mut stmt = conn.prepare(
+        "SELECT block_id, scope FROM block_pins ORDER BY block_id, scope",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (block_id, scope) in rows {
+        out.entry(block_id).or_default().push(scope);
+    }
+    Ok(out)
 }
 
 /// Read every block's joined tag list in one query. Returns a map from
@@ -188,17 +254,19 @@ fn fetch_block_tags(conn: &Connection) -> Result<std::collections::HashMap<Strin
 
 pub fn list_blocks(conn: &Connection) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
+    let pin_map = fetch_block_pin_scopes(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks ORDER BY position",
     )?;
     let rows = stmt
-        .query_map([], |row| row_to_block(row, &tag_map))?
+        .query_map([], |row| row_to_block(row, &tag_map, &pin_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
 pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
+    let pin_map = fetch_block_pin_scopes(conn)?;
     let needle = tag.to_lowercase();
     let mut stmt = conn.prepare(
         "SELECT b.id, b.parent_id, b.position, b.heading, b.heading_level, b.content, b.content_hash, b.pinned, b.title, b.created_at, b.updated_at
@@ -209,7 +277,7 @@ pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBloc
          ORDER BY b.position",
     )?;
     let rows = stmt
-        .query_map(params![needle], |row| row_to_block(row, &tag_map))?
+        .query_map(params![needle], |row| row_to_block(row, &tag_map, &pin_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -496,7 +564,7 @@ pub struct SavedBlock {
     pub content: String,
     pub content_hash: String,
     pub tags: Vec<String>,
-    pub pinned: bool,
+    pub pinned_scopes: Vec<String>,
     pub title: Option<String>,
     pub updated_at: i64,
 }
@@ -547,10 +615,17 @@ pub fn save_snapshot(
         let stripped_content = parser::strip_inline_hashtags(&b.content);
         let new_hash = parser::hash(&stripped_content);
 
-        let pinned_val: i64 = match (b.pinned, &prior) {
-            (Some(p), _) => if p { 1 } else { 0 },
-            (None, Some((_, _, prior_pinned, _))) => *prior_pinned,
-            (None, None) => 0,
+        // Legacy `blocks.pinned` column. We've moved to block_pins as
+        // the canonical store, but the column stays around for agents
+        // writing directly. Pure-structural saves preserve the prior
+        // value; pinned_scopes overwrites are handled separately below
+        // and we also clear the legacy column when the user explicitly
+        // sets the new scope set (so we don't end up with stale ghost
+        // pins from the legacy column).
+        let pinned_legacy_val: i64 = if b.pinned_scopes.is_some() {
+            0
+        } else {
+            prior.as_ref().map(|p| p.2).unwrap_or(0)
         };
         // Title: None on the input means "preserve prior"; Some("") clears
         // the title (NULL); any other Some sets it.
@@ -597,12 +672,35 @@ pub fn save_snapshot(
                 b.heading_level,
                 stripped_content,
                 new_hash,
-                pinned_val,
+                pinned_legacy_val,
                 title_val,
                 created_at,
                 now,
             ],
         )?;
+
+        // Rewrite block_pins rows when the caller passed an explicit
+        // scope set. Two-step (delete then insert) for the same reason
+        // as block_tags — small set, simpler than a diff.
+        if let Some(scopes) = &b.pinned_scopes {
+            tx.execute(
+                "DELETE FROM block_pins WHERE block_id = ?1",
+                params![b.id],
+            )?;
+            let mut seen: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for s in scopes {
+                let scope = s.trim().to_string();
+                if seen.contains(&scope) {
+                    continue;
+                }
+                seen.insert(scope.clone());
+                tx.execute(
+                    "INSERT OR IGNORE INTO block_pins(block_id, scope) VALUES(?1, ?2)",
+                    params![b.id, scope],
+                )?;
+            }
+        }
 
         // Final tag set: extracted-from-content ∪ explicit input tags
         // (when present). When `input.tags` is None and the block
@@ -720,12 +818,30 @@ pub fn save_snapshot(
             |r| r.get(0),
         )?;
 
+        // Read back the canonical scope set for this block so the
+        // frontend can patch its store from the same view it'll see
+        // on the next list_blocks. Includes the legacy `blocks.pinned`
+        // → '' merge so external writes are visible immediately.
+        let mut scope_set: std::collections::BTreeSet<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT scope FROM block_pins WHERE block_id = ?1",
+            )?;
+            let s: rusqlite::Result<Vec<String>> = stmt
+                .query_map(params![b.id], |r| r.get::<_, String>(0))?
+                .collect();
+            s?.into_iter().collect()
+        };
+        if pinned_legacy_val != 0 {
+            scope_set.insert(String::new());
+        }
+        let scopes_out: Vec<String> = scope_set.into_iter().collect();
+
         saved.push(SavedBlock {
             id: b.id.clone(),
             content: stripped_content,
             content_hash: new_hash,
             tags: final_tag_names,
-            pinned: pinned_val != 0,
+            pinned_scopes: scopes_out,
             title: title_val,
             updated_at,
         });
@@ -1064,11 +1180,26 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 fn row_to_block(
     row: &rusqlite::Row,
     tag_map: &std::collections::HashMap<String, Vec<String>>,
+    pin_map: &std::collections::HashMap<String, Vec<String>>,
 ) -> rusqlite::Result<StoredBlock> {
     let heading_level: Option<i64> = row.get(4)?;
-    let pinned: i64 = row.get(7)?;
+    let legacy_pinned: i64 = row.get(7)?;
     let id: String = row.get(0)?;
     let tags = tag_map.get(&id).cloned().unwrap_or_default();
+    // Merge legacy `blocks.pinned = 1` (e.g. agent writes) with the
+    // scoped block_pins set. Legacy pin counts as the global scope (
+    // empty string). De-dupe via a BTreeSet so the result is sorted +
+    // unique.
+    let mut scope_set: std::collections::BTreeSet<String> = pin_map
+        .get(&id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if legacy_pinned != 0 {
+        scope_set.insert(String::new());
+    }
+    let pinned_scopes: Vec<String> = scope_set.into_iter().collect();
     Ok(StoredBlock {
         id,
         parent_id: row.get(1)?,
@@ -1078,7 +1209,7 @@ fn row_to_block(
         content: row.get(5)?,
         content_hash: row.get(6)?,
         tags,
-        pinned: pinned != 0,
+        pinned_scopes,
         title: row.get(8)?,
         created_at: row.get(9)?,
         updated_at: row.get(10)?,

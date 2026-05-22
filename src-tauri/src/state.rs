@@ -136,7 +136,7 @@ impl AppState {
                         heading: b.heading,
                         heading_level: b.heading_level,
                         tags: None,
-                        pinned: None,
+                        pinned_scopes: None,
                         title: None,
                     })
                     .collect();
@@ -205,7 +205,7 @@ impl AppState {
                 heading,
                 heading_level: *heading_level,
                 tags: None,
-                pinned: None,
+                pinned_scopes: None,
                 title: None,
             });
         }

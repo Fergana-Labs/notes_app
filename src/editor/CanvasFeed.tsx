@@ -447,11 +447,14 @@ export function CanvasFeed({
     else if (sort === "oldest")
       arr = [...arr].sort((a, b) => a.updated_at - b.updated_at);
     // Pinned blocks float to the top, preserving the chosen sort
-    // order within each partition. The single-block "focused" view
-    // bypasses this (still one card).
+    // order within each partition. "Pinned" is scope-dependent: in
+    // a tag filter view, a block counts as pinned if it carries
+    // that tag in its scope set; in the All view, the empty-string
+    // scope is the global pin.
+    const currentScope = tagFilter ?? "";
     if (arr.length > 1) {
-      const pinned = arr.filter((b) => b.pinned);
-      const rest = arr.filter((b) => !b.pinned);
+      const pinned = arr.filter((b) => b.pinned_scopes.includes(currentScope));
+      const rest = arr.filter((b) => !b.pinned_scopes.includes(currentScope));
       arr = pinned.length > 0 ? [...pinned, ...rest] : arr;
     }
     return arr;
@@ -803,10 +806,17 @@ export function CanvasFeed({
   };
 
   const togglePin = async (block: StoredBlock) => {
-    const next = !block.pinned;
-    await runWithUndo(next ? "Pin" : "Unpin", async () => {
+    // Pin within the current view's scope: empty string = "All blocks",
+    // otherwise the active tag name. Add or remove from the block's
+    // scope set; the saved set is the full replacement.
+    const scope = tagFilter ?? "";
+    const has = block.pinned_scopes.includes(scope);
+    const next = has
+      ? block.pinned_scopes.filter((s) => s !== scope)
+      : [...block.pinned_scopes, scope];
+    await runWithUndo(has ? "Unpin" : "Pin", async () => {
       await saveSnapshot(
-        [asBlockInput(block, { pinned: next })],
+        [asBlockInput(block, { pinned_scopes: next })],
         [],
       );
     });
@@ -1387,6 +1397,7 @@ export function CanvasFeed({
               ) : (
               <FeedCard
                 block={b}
+                scope={tagFilter ?? ""}
                 pendingFocus={
                   pendingFocus?.id === b.id ? pendingFocus.edge : null
                 }
@@ -1463,6 +1474,9 @@ export function CanvasFeed({
 
 interface CardProps {
   block: StoredBlock;
+  /** Currently active pin scope: tagFilter or "" for global. The
+   *  card's pin button toggles membership in this scope. */
+  scope: string;
   pendingFocus: "start" | "end" | null;
   selected: boolean;
   /** True when this card is one of the SELECTED siblings of an
@@ -1495,6 +1509,7 @@ interface CardProps {
 const FeedCard = memo(
   function FeedCard({
     block,
+    scope,
     pendingFocus,
     selected,
     groupDragGhost,
@@ -1656,16 +1671,24 @@ const FeedCard = memo(
                 e.stopPropagation();
                 onTogglePin();
               }}
-              title={block.pinned ? "Unpin from top" : "Pin to top"}
+              title={
+                block.pinned_scopes.includes(scope)
+                  ? scope
+                    ? `Unpin from #${scope}`
+                    : "Unpin from top"
+                  : scope
+                    ? `Pin to top of #${scope}`
+                    : "Pin to top"
+              }
               className={`p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 ${
-                block.pinned
+                block.pinned_scopes.includes(scope)
                   ? "text-blue-600 dark:text-blue-400"
                   : "hover:text-neutral-700 dark:hover:text-neutral-200"
               }`}
             >
               <Pin
                 size={13}
-                fill={block.pinned ? "currentColor" : "none"}
+                fill={block.pinned_scopes.includes(scope) ? "currentColor" : "none"}
               />
             </button>
             <button
@@ -1855,6 +1878,7 @@ const FeedCard = memo(
   },
   (prev, next) =>
     prev.block === next.block &&
+    prev.scope === next.scope &&
     prev.pendingFocus === next.pendingFocus &&
     prev.selected === next.selected &&
     prev.groupDragGhost === next.groupDragGhost &&
@@ -3025,12 +3049,12 @@ function asBlockInput(b: StoredBlock, override?: Partial<BlockInput>): BlockInpu
     heading: override?.heading ?? b.heading,
     heading_level: override?.heading_level ?? b.heading_level,
   };
-  // Only forward `tags` / `pinned` / `title` when the caller explicitly
-  // passed them. Omitting from BlockInput tells the backend to preserve
-  // prior state for those fields — important for pure-position reorders /
-  // structural edits.
+  // Only forward `tags` / `pinned_scopes` / `title` when the caller
+  // explicitly passed them. Omitting from BlockInput tells the backend
+  // to preserve prior state for those fields — important for pure-
+  // position reorders / structural edits.
   if (override && "tags" in override) out.tags = override.tags;
-  if (override && "pinned" in override) out.pinned = override.pinned;
+  if (override && "pinned_scopes" in override) out.pinned_scopes = override.pinned_scopes;
   if (override && "title" in override) out.title = override.title;
   return out;
 }
