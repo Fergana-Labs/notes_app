@@ -5,6 +5,7 @@ import { Markdown } from "tiptap-markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ulid } from "ulid";
 import type { Editor } from "@tiptap/core";
+import { splitListItem } from "@tiptap/pm/schema-list";
 import {
   Send,
   ArrowUpToLine,
@@ -260,19 +261,33 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           }
         }
         if (event.key === "Enter") {
-          // Shift+Enter → split at cursor. This is the original chatbox
-          // behavior: a paragraph split outside a list, a new list item
-          // split inside a list — produces a visible new line either
-          // way. The HardBreak-based experiments didn't render visibly
-          // and the plugin-active scan that used to wrap this was
-          // matching unrelated plugin state.
+          // Shift+Enter → split at cursor.
+          //   - Inside a list item, split the list item so a new bullet
+          //     appears below (matches plain Enter's list behavior; the
+          //     plain-paragraph tr.split would leave the new paragraph
+          //     inside the same <li>, which renders as indented text
+          //     under the bullet rather than a new bullet).
+          //   - Outside a list, plain paragraph split.
           if (event.shiftKey) {
             event.preventDefault();
-            view.dispatch(
-              view.state.tr
-                .split(view.state.selection.$from.pos)
-                .scrollIntoView(),
-            );
+            const { $from } = view.state.selection;
+            let listItemType: any = null;
+            for (let d = $from.depth; d > 0; d--) {
+              const n = $from.node(d);
+              if (n.type.name === "listItem") {
+                listItemType = n.type;
+                break;
+              }
+            }
+            if (listItemType) {
+              splitListItem(listItemType)(view.state, view.dispatch);
+            } else {
+              view.dispatch(
+                view.state.tr
+                  .split(view.state.selection.$from.pos)
+                  .scrollIntoView(),
+              );
+            }
             return true;
           }
           // Plain Enter inside a list / code block → let PM open a new
