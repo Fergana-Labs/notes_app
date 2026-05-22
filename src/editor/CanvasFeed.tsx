@@ -261,6 +261,33 @@ function useVirtualRows<T extends { id: string }>(
   return { totalSize: layout.totalSize, virtualItems, measureElement };
 }
 
+/**
+ * Serialize the editor's doc to markdown while preserving empty
+ * paragraphs across the round-trip. Plain markdown has no syntax
+ * for "an empty paragraph" — consecutive blank lines collapse — so
+ * tiptap-markdown's default serializer drops them and the user
+ * loses intentional whitespace on save. We walk the top-level doc
+ * nodes ourselves: empty paragraphs become a single U+00A0 (NBSP)
+ * line, everything else serializes normally. NBSP isn't whitespace
+ * by CommonMark spec, so the paragraph survives markdown → PM and
+ * the empty line reappears on reload.
+ */
+function getMarkdownPreservingEmptyParas(ed: Editor): string {
+  const serializer = (ed.storage as any).markdown?.serializer;
+  if (!serializer) {
+    return (ed.storage as any).markdown?.getMarkdown?.() ?? "";
+  }
+  const parts: string[] = [];
+  ed.state.doc.content.forEach((node) => {
+    if (node.type.name === "paragraph" && node.textContent.length === 0) {
+      parts.push(" ");
+    } else {
+      parts.push(serializer.serialize(node));
+    }
+  });
+  return parts.join("\n\n");
+}
+
 function virtualRowStyle(start: number, gap: number): React.CSSProperties {
   return {
     position: "absolute",
@@ -2021,7 +2048,7 @@ function EditableBody({
       const lifted = liftHashtagsFromEditor(editor, b.tags);
       if (lifted.length > 0) {
         saveDebounced.cancel();
-        const md: string = (editor.storage as any).markdown.getMarkdown();
+        const md = getMarkdownPreservingEmptyParas(editor);
         const cleaned = unescapeInlineHashtags(md);
         const { heading, level } = deriveHeading(cleaned);
         const label = lifted.length === 1 ? `Lift #${lifted[0]}` : "Lift tags";
@@ -2054,7 +2081,7 @@ function EditableBody({
         saveDebounced.cancel();
         return;
       }
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
     onSelectionUpdate: ({ editor }) => {
@@ -2063,7 +2090,7 @@ function EditableBody({
       // case (arrow keys, mouse click). When that happens, fire a
       // save with the current content so deferred typing lands.
       if (cursorInsideHashtag(editor)) return;
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
     onBlur: ({ editor }) => {
@@ -2071,7 +2098,7 @@ function EditableBody({
       // force a save with the current content (in case we were
       // skipping due to cursor-in-tag).
       saveDebounced.flush();
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
       saveDebounced.flush();
     },
@@ -2109,8 +2136,7 @@ function EditableBody({
 
   useEffect(() => {
     if (!editor || editor.isFocused) return;
-    const current: string =
-      (editor.storage as any).markdown?.getMarkdown?.() ?? "";
+    const current = getMarkdownPreservingEmptyParas(editor);
     if (current.trim() !== block.content.trim()) {
       editor.commands.setContent(block.content, { emitUpdate: false });
     }
@@ -3081,17 +3107,17 @@ function ExpandedBlockEditor({
         saveDebounced.cancel();
         return;
       }
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
     onSelectionUpdate: ({ editor }) => {
       if (cursorInsideHashtag(editor)) return;
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
     onBlur: ({ editor }) => {
       saveDebounced.flush();
-      const md: string = (editor.storage as any).markdown.getMarkdown();
+      const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
       saveDebounced.flush();
     },
@@ -3102,8 +3128,7 @@ function ExpandedBlockEditor({
   // clobber the user's typing.
   useEffect(() => {
     if (!editor || editor.isFocused || !block) return;
-    const current: string =
-      (editor.storage as any).markdown?.getMarkdown?.() ?? "";
+    const current = getMarkdownPreservingEmptyParas(editor);
     if (current.trim() !== block.content.trim()) {
       editor.commands.setContent(block.content, { emitUpdate: false });
     }
