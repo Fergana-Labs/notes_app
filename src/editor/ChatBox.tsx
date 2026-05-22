@@ -260,23 +260,20 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           }
         }
         if (event.key === "Enter") {
-          // Shift+Enter → explicit hard break. Insert a hardBreak node
-          // at the cursor and consume the event. Doing it imperatively
-          // rather than `return false` (defer to keymap) sidesteps any
-          // upstream keymap that might gobble Shift-Enter first.
+          // Shift+Enter → split at cursor. This is the original chatbox
+          // behavior: a paragraph split outside a list, a new list item
+          // split inside a list — produces a visible new line either
+          // way. The HardBreak-based experiments didn't render visibly
+          // and the plugin-active scan that used to wrap this was
+          // matching unrelated plugin state.
           if (event.shiftKey) {
-            const { schema, tr } = view.state;
-            const hardBreak = schema.nodes.hardBreak;
-            if (hardBreak) {
-              event.preventDefault();
-              view.dispatch(
-                tr
-                  .replaceSelectionWith(hardBreak.create(), true)
-                  .scrollIntoView(),
-              );
-              return true;
-            }
-            return false;
+            event.preventDefault();
+            view.dispatch(
+              view.state.tr
+                .split(view.state.selection.$from.pos)
+                .scrollIntoView(),
+            );
+            return true;
           }
           // Plain Enter inside a list / code block → let PM open a new
           // bullet / newline. Outside, fall through to submit.
