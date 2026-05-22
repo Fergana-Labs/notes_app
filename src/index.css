@@ -588,6 +588,19 @@ mark { background: oklch(0.95 0.1 100); padding: 0 2px; border-radius: 2px; }
   }
 }
 
+/* New-tag input in the sidebar. Force dark text on white background
+ * regardless of colorful mode (which otherwise repaints every
+ * neutral-* in the sidebar to white-on-sage). High enough specificity
+ * to beat the `.colorful aside .text-neutral-900` repaint rule. */
+.colorful aside .mochi-new-tag-input,
+.colorful aside .mochi-new-tag-input input,
+.colorful aside .mochi-new-tag-input span {
+  color: #1a1a1a;
+}
+.colorful aside .mochi-new-tag-input input::placeholder {
+  color: #9ca3af;
+}
+
 /* ============================================================
  * Compact density. Activated by `.compact` on <html>. Trims the
  * card-to-card gap and inner padding so more blocks fit on screen.

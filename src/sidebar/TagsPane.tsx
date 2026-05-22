@@ -490,8 +490,8 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
       </div>
 
       {newTagDraft !== null && (
-        <div className="flex items-center gap-1 px-2 py-1 text-sm rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950">
-          <span className="text-neutral-400">#</span>
+        <div className="mochi-new-tag-input flex items-center gap-1 px-2 py-1 text-sm rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950">
+          <span>#</span>
           <input
             autoFocus
             value={newTagDraft}
