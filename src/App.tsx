@@ -29,6 +29,10 @@ export default function App() {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Track fullscreen single-block view at App level so the ChatBox can
+  // adapt its placeholder. The state itself lives in CanvasFeed; this
+  // mirror is read-only.
+  const [feedFullscreen, setFeedFullscreen] = useState(false);
 
   const headerRef = useRef<HTMLElement>(null);
   useDragRegion(headerRef);
@@ -208,8 +212,9 @@ export default function App() {
             }}
             dateRange={dateRange}
             onClearDateRange={() => setDateRange({ from: null, to: null })}
+            onFullscreenChange={setFeedFullscreen}
           />
-          <ChatBox tagFilter={tagFilter} />
+          <ChatBox tagFilter={tagFilter} fullscreen={feedFullscreen} />
         </div>
       </main>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

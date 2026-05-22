@@ -305,6 +305,10 @@ interface Props {
    *  (omitted side = unbounded). */
   dateRange?: { from: number | null; to: number | null };
   onClearDateRange?: () => void;
+  /** Notified when the user enters / leaves the fullscreen single-block
+   *  view. App uses this to adapt the ChatBox placeholder so the user
+   *  knows captures still go to all blocks, not the expanded block. */
+  onFullscreenChange?: (active: boolean) => void;
 }
 
 interface PendingFocus {
@@ -334,6 +338,7 @@ export function CanvasFeed({
   caseSensitive = false,
   dateRange = { from: null, to: null },
   onClearDateRange,
+  onFullscreenChange,
 }: Props) {
   const blocks = useWorkspace((s) => s.blocks);
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
@@ -1109,6 +1114,9 @@ export function CanvasFeed({
   // lands the user right back where they were. Sidebar + top bar
   // still live one level up in App.tsx.
   const fullscreen = !!expandedId;
+  useEffect(() => {
+    onFullscreenChange?.(fullscreen);
+  }, [fullscreen, onFullscreenChange]);
   return (
     <>
     <div

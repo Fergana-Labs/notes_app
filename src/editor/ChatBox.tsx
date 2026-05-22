@@ -25,6 +25,11 @@ interface Props {
    *  are pre-seeded with `#tag` so they immediately appear in the
    *  filtered view. */
   tagFilter?: string | null;
+  /** True when the canvas is showing the single-block fullscreen editor.
+   *  ChatBox still captures to "all blocks" — this prop just tweaks the
+   *  placeholder so the user understands the capture isn't scoped to
+   *  the open block. */
+  fullscreen?: boolean;
 }
 
 /**
@@ -38,7 +43,7 @@ interface Props {
  * Listens for `mochi:focus-chatbox` from the Cmd-N keyboard shortcut so
  * the user can capture from anywhere.
  */
-export function ChatBox({ tagFilter = null }: Props) {
+export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   const tags = useWorkspace((s) => s.tags);
   const blocks = useWorkspace((s) => s.blocks);
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
@@ -54,6 +59,10 @@ export function ChatBox({ tagFilter = null }: Props) {
   useEffect(() => {
     tagFilterRef.current = tagFilter;
   }, [tagFilter]);
+  const fullscreenRef = useRef(fullscreen);
+  useEffect(() => {
+    fullscreenRef.current = fullscreen;
+  }, [fullscreen]);
 
   const direction = useChatSettings((s) => s.direction);
   const setDirection = useChatSettings((s) => s.setDirection);
@@ -98,7 +107,10 @@ export function ChatBox({ tagFilter = null }: Props) {
       }),
       Markdown.configure({ html: false, linkify: true, breaks: false }),
       Placeholder.configure({
-        placeholder: "Capture a thought…",
+        placeholder: () =>
+          fullscreenRef.current
+            ? "Capture a thought (goes to all blocks)…"
+            : "Capture a thought…",
         showOnlyWhenEditable: true,
       }),
       Hashtag.configure({
