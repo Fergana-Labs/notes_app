@@ -1185,6 +1185,13 @@ export function CanvasFeed({
   useEffect(() => {
     onFullscreenChange?.(fullscreen);
   }, [fullscreen, onFullscreenChange]);
+  // Any tagFilter change (typically a sidebar click) drops the user out
+  // of the single-block fullscreen view — they asked for a different
+  // slice of the feed, so keeping the open block on top of it would
+  // hide what they navigated to.
+  useEffect(() => {
+    setExpandedId(null);
+  }, [tagFilter]);
   return (
     <>
     <div

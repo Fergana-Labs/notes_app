@@ -200,9 +200,11 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
 
   const editor = useEditor({
     extensions: [
-      // Disable HardBreak — we use paragraph splits for newlines instead.
+      // Keep HardBreak so Shift+Enter inserts a soft line break — same
+      // as the per-card block editor. The previous "paragraph split on
+      // Shift+Enter" override felt wrong (visually no new line; inside a
+      // bullet it'd break the list).
       StarterKit.configure({
-        hardBreak: false,
         link: {
           openOnClick: false,
           autolink: true,
@@ -263,13 +265,12 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             const s = (p as any).getState?.(view.state);
             if (s && typeof s === "object" && (s as any).active) return false;
           }
-          // Check list/code context once — both Shift+Enter and plain
-          // Enter need it. Inside a list, both should defer to PM so
-          // Enter opens a new bullet and Shift+Enter inserts a soft
-          // break inside the current item. Outside, Shift+Enter is a
-          // paragraph split and plain Enter submits.
+          // Shift+Enter → let HardBreak handle (soft line break),
+          // regardless of list context. Same as the per-card editor.
+          if (event.shiftKey) return false;
+          // Plain Enter inside a list / code block → let PM open a new
+          // bullet / newline. Outside, fall through to submit.
           const { $from } = view.state.selection;
-          let inListOrCode = false;
           for (let d = $from.depth; d > 0; d--) {
             const n = $from.node(d);
             if (
@@ -277,20 +278,9 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
               n.type.name === "codeBlock" ||
               n.type.name === "taskItem"
             ) {
-              inListOrCode = true;
-              break;
+              return false;
             }
           }
-          if (event.shiftKey) {
-            if (inListOrCode) return false;
-            // Shift+Enter outside a list → split paragraph.
-            event.preventDefault();
-            view.dispatch(
-              view.state.tr.split(view.state.selection.$from.pos).scrollIntoView(),
-            );
-            return true;
-          }
-          if (inListOrCode) return false;
           // Plain Enter → submit.
           event.preventDefault();
           submit();
