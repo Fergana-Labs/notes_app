@@ -259,15 +259,25 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             return true;
           }
         }
-        // Don't intercept while a hashtag picker is open.
         if (event.key === "Enter") {
-          for (const p of view.state.plugins) {
-            const s = (p as any).getState?.(view.state);
-            if (s && typeof s === "object" && (s as any).active) return false;
+          // Shift+Enter → explicit hard break. Insert a hardBreak node
+          // at the cursor and consume the event. Doing it imperatively
+          // rather than `return false` (defer to keymap) sidesteps any
+          // upstream keymap that might gobble Shift-Enter first.
+          if (event.shiftKey) {
+            const { schema, tr } = view.state;
+            const hardBreak = schema.nodes.hardBreak;
+            if (hardBreak) {
+              event.preventDefault();
+              view.dispatch(
+                tr
+                  .replaceSelectionWith(hardBreak.create(), true)
+                  .scrollIntoView(),
+              );
+              return true;
+            }
+            return false;
           }
-          // Shift+Enter → let HardBreak handle (soft line break),
-          // regardless of list context. Same as the per-card editor.
-          if (event.shiftKey) return false;
           // Plain Enter inside a list / code block → let PM open a new
           // bullet / newline. Outside, fall through to submit.
           const { $from } = view.state.selection;
