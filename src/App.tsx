@@ -39,6 +39,7 @@ export default function App() {
 
   const loadUISettings = useUISettings((s) => s.load);
   const colorful = useUISettings((s) => s.colorful);
+  const compact = useUISettings((s) => s.compact);
   useEffect(() => {
     bootstrap();
     loadUISettings();
@@ -49,6 +50,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("colorful", colorful);
   }, [colorful]);
+  useEffect(() => {
+    document.documentElement.classList.toggle("compact", compact);
+  }, [compact]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

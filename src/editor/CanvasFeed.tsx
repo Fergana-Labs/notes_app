@@ -55,6 +55,7 @@ import { Markdown } from "tiptap-markdown";
 import { ulid } from "ulid";
 import type { Editor } from "@tiptap/core";
 import { useWorkspace } from "../stores/workspace";
+import { useUISettings } from "../stores/uiSettings";
 import { ipc, type BlockInput, type StoredBlock } from "../lib/ipc";
 import { debounce } from "../lib/debounce";
 import { unescapeInlineHashtags } from "../lib/markdown";
@@ -79,7 +80,8 @@ type SortMode = "canvas" | "newest" | "oldest";
 // Tiptap state when scrolling.
 
 const FEED_ROW_ESTIMATE = 140;
-const FEED_ROW_GAP = 10;
+const FEED_ROW_GAP_COMFY = 10;
+const FEED_ROW_GAP_COMPACT = 4;
 const FEED_ROW_OVERSCAN = 8;
 
 function findIndexAtOffset(offsets: number[], value: number): number {
@@ -259,14 +261,14 @@ function useVirtualRows<T extends { id: string }>(
   return { totalSize: layout.totalSize, virtualItems, measureElement };
 }
 
-function virtualRowStyle(start: number): React.CSSProperties {
+function virtualRowStyle(start: number, gap: number): React.CSSProperties {
   return {
     position: "absolute",
     top: 0,
     left: 0,
     width: "100%",
     transform: `translateY(${start}px)`,
-    paddingBottom: FEED_ROW_GAP,
+    paddingBottom: gap,
     boxSizing: "border-box",
   };
 }
@@ -343,6 +345,8 @@ export function CanvasFeed({
   const blocks = useWorkspace((s) => s.blocks);
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
   const runWithUndo = useWorkspace((s) => s.runWithUndo);
+  const compact = useUISettings((s) => s.compact);
+  const rowGap = compact ? FEED_ROW_GAP_COMPACT : FEED_ROW_GAP_COMFY;
 
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -1306,7 +1310,7 @@ export function CanvasFeed({
               <div
                 key={b.id}
                 ref={(el) => measureElement(b.id, el)}
-                style={virtualRowStyle(start)}
+                style={virtualRowStyle(start, rowGap)}
               >
               <FeedCard
                 block={b}

@@ -12,6 +12,8 @@ import { useUISettings } from "../stores/uiSettings";
 export function AppearanceTab() {
   const colorful = useUISettings((s) => s.colorful);
   const setColorful = useUISettings((s) => s.setColorful);
+  const compact = useUISettings((s) => s.compact);
+  const setCompact = useUISettings((s) => s.setCompact);
 
   return (
     <div className="space-y-6">
@@ -52,6 +54,25 @@ export function AppearanceTab() {
                 style={{ background: "#3f573d" }}
                 title="Deep accent (dark)"
               />
+            </div>
+          </div>
+        </label>
+      </section>
+
+      <section>
+        <h3 className="font-medium mb-2">Density</h3>
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={compact}
+            onChange={(e) => void setCompact(e.target.checked)}
+            className="mt-0.5 cursor-pointer"
+          />
+          <div className="flex-1">
+            <div className="text-sm font-medium">Compact spacing</div>
+            <div className="text-xs text-neutral-500 mt-0.5">
+              Trim padding inside each card and tighten the gap between
+              cards so more blocks fit on screen.
             </div>
           </div>
         </label>
