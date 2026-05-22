@@ -135,6 +135,22 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             );
             return true;
           }
+          // Inside a list item / code block, let PM handle Enter natively
+          // — that's how new list items and code-block newlines work.
+          // Without this short-circuit, Enter inside `- foo` would submit
+          // instead of opening a new bullet, which made lists feel broken
+          // in the capture bar.
+          const { $from } = view.state.selection;
+          for (let d = $from.depth; d > 0; d--) {
+            const n = $from.node(d);
+            if (
+              n.type.name === "listItem" ||
+              n.type.name === "codeBlock" ||
+              n.type.name === "taskItem"
+            ) {
+              return false;
+            }
+          }
           // Plain Enter → submit.
           event.preventDefault();
           submit();
