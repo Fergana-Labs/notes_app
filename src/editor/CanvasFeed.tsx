@@ -1978,6 +1978,18 @@ function EditableBody({
           void useWorkspace.getState().undoLast();
           return true;
         }
+        // Backspace parity with the ChatBox: when the immediately-
+        // previous edit was a hashtag lift, the user's mental model
+        // is "I just made a tag, that backspace undoes it." The
+        // lift-undo flag only stays true until any non-lift edit
+        // happens, so this won't fire mid-typing.
+        if (event.key === "Backspace" && lastActionWasLiftRef.current) {
+          event.preventDefault();
+          lastActionWasLiftRef.current = false;
+          saveDebounced.cancel();
+          void useWorkspace.getState().undoLast();
+          return true;
+        }
         return false;
       },
     },
