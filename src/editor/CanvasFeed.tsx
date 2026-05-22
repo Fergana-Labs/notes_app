@@ -2493,34 +2493,13 @@ const CrossBlockNav = Extension.create<CrossBlockNavOptions>({
         this.options.onSplitHere();
         return true;
       },
-      Enter: () => {
-        const { state } = this.editor;
-        const { selection, doc } = state;
-        if (!selection.empty) return false;
-        const $pos = selection.$head;
-        // Let lists / code blocks handle Enter natively.
-        for (let d = $pos.depth; d > 0; d--) {
-          const n = $pos.node(d);
-          if (
-            n.type.name === "listItem" ||
-            n.type.name === "codeBlock" ||
-            n.type.name === "taskItem"
-          ) {
-            return false;
-          }
-        }
-        // Only escape to a new card if the cursor is at the very end of
-        // the doc *and* the current textblock is empty. Otherwise we'd
-        // hijack Enter mid-paragraph, which the user would experience as
-        // text getting silently dropped.
-        const atEnd = $pos.pos === doc.content.size - 1;
-        const inEmpty = $pos.parent.textContent.length === 0;
-        if (atEnd && inEmpty) {
-          this.options.onAppendBelow();
-          return true;
-        }
-        return false;
-      },
+      // Enter is a pure paragraph split inside the current block now.
+      // The previous "Enter on a trailing empty line escapes to a new
+      // card" path was too easy to trigger accidentally — the user
+      // hits Enter twice to leave space and the second one mints a
+      // block they didn't want. Cmd-Enter (handled above) is the
+      // explicit "make a new block" shortcut.
+      // Returning false lets PM run its native split behavior.
       Backspace: () => {
         const { state } = this.editor;
         const { selection } = state;
