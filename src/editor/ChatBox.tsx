@@ -2,8 +2,9 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Markdown } from "tiptap-markdown";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ulid } from "ulid";
+import type { Editor } from "@tiptap/core";
 import {
   Send,
   ArrowUpToLine,
@@ -94,6 +95,109 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     setPendingTags((prev) => prev.filter((t) => t !== tag));
   };
 
+  // Inline tag autocomplete. When the cursor sits inside a partial
+  // `#xxx` token, `pickerQuery` holds the typed text (after the `#`)
+  // and `pickerRange` holds the PM positions of the `#` and the end
+  // of the partial — used to replace the whole token when the user
+  // commits a suggestion. `highlightIdx` tracks keyboard nav.
+  const [pickerQuery, setPickerQuery] = useState<string | null>(null);
+  const [pickerRange, setPickerRange] = useState<{ from: number; to: number } | null>(null);
+  const [pickerIdx, setPickerIdx] = useState(0);
+  const pickerSuggestions = useMemo(() => {
+    if (pickerQuery === null) return [] as { kind: "existing" | "create"; name: string }[];
+    const q = pickerQuery.toLowerCase();
+    const have = new Set(pendingTagsRef.current);
+    const names = tagsRef.current.map((t) => t.tag).filter((t) => !have.has(t));
+    let matches = names.filter((t) => !q || t.toLowerCase().includes(q));
+    matches.sort((a, b) => {
+      if (!q) return a.localeCompare(b);
+      const ap = a.toLowerCase().startsWith(q);
+      const bp = b.toLowerCase().startsWith(q);
+      if (ap && !bp) return -1;
+      if (!ap && bp) return 1;
+      return a.localeCompare(b);
+    });
+    matches = matches.slice(0, 8);
+    const createSlot: { kind: "create" | "existing"; name: string }[] =
+      q.length > 0 &&
+      TAG_NAME_RE.test(q) &&
+      !names.some((t) => t.toLowerCase() === q)
+        ? [{ kind: "create" as const, name: q }]
+        : [];
+    return [...createSlot, ...matches.map((t) => ({ kind: "existing" as const, name: t }))];
+  }, [pickerQuery, tags]);
+  useEffect(() => {
+    setPickerIdx(0);
+  }, [pickerQuery]);
+
+  const pickerOpenRef = useRef(false);
+  useEffect(() => {
+    pickerOpenRef.current = pickerQuery !== null;
+  }, [pickerQuery]);
+  const pickerSuggestionsRef = useRef(pickerSuggestions);
+  useEffect(() => {
+    pickerSuggestionsRef.current = pickerSuggestions;
+  }, [pickerSuggestions]);
+  const pickerIdxRef = useRef(pickerIdx);
+  useEffect(() => {
+    pickerIdxRef.current = pickerIdx;
+  }, [pickerIdx]);
+  const pickerRangeRef = useRef(pickerRange);
+  useEffect(() => {
+    pickerRangeRef.current = pickerRange;
+  }, [pickerRange]);
+
+  /** Walk the doc, find the `#tag` token under the cursor (if any).
+   *  Returns null when the cursor isn't inside one. */
+  const detectPickerState = (ed: Editor): { query: string; range: { from: number; to: number } } | null => {
+    const { doc, selection } = ed.state;
+    if (!selection.empty) return null;
+    const cursor = selection.head;
+    let result: { query: string; range: { from: number; to: number } } | null = null;
+    doc.descendants((node, pos, parent) => {
+      if (result) return false;
+      if (!node.isText || !node.text) return;
+      if (
+        parent &&
+        (parent.type.name === "codeBlock" || parent.type.name === "code")
+      ) {
+        return;
+      }
+      const re = /(^|[\s])#([A-Za-z][A-Za-z0-9_\-/]*)?/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(node.text)) !== null) {
+        const hashAt = pos + m.index + m[1].length;
+        const tagEnd = hashAt + 1 + (m[2]?.length ?? 0);
+        if (cursor >= hashAt + 1 && cursor <= tagEnd) {
+          result = {
+            query: (m[2] ?? "").toLowerCase(),
+            range: { from: hashAt, to: tagEnd },
+          };
+          return false;
+        }
+      }
+    });
+    return result;
+  };
+
+  /** Commit a chosen tag: replace the `#partial` range in the editor with
+   *  `#fullName ` (with trailing space) so the existing lift pass turns
+   *  it into a chip on the next update. */
+  const commitPickerTag = (name: string) => {
+    if (!editor) return;
+    const range = pickerRangeRef.current;
+    if (!range) return;
+    const t = name.trim().toLowerCase().replace(/^#/, "");
+    if (!TAG_NAME_RE.test(t)) return;
+    editor
+      .chain()
+      .focus()
+      .insertContentAt(range, `#${t} `)
+      .run();
+    setPickerQuery(null);
+    setPickerRange(null);
+  };
+
   const editor = useEditor({
     extensions: [
       // Disable HardBreak — we use paragraph splits for newlines instead.
@@ -121,6 +225,38 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     content: "",
     editorProps: {
       handleKeyDown(view, event) {
+        // Tag autocomplete picker keyboard handlers — only active while
+        // the cursor sits inside a partial `#xxx` token. Arrows nav,
+        // Enter commits, Escape closes (and the user keeps typing the
+        // raw `#xxx`).
+        if (pickerOpenRef.current) {
+          const sugs = pickerSuggestionsRef.current;
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setPickerIdx((i) => Math.min(i + 1, Math.max(0, sugs.length - 1)));
+            return true;
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setPickerIdx((i) => Math.max(i - 1, 0));
+            return true;
+          }
+          if (event.key === "Enter") {
+            const pick = sugs[pickerIdxRef.current];
+            if (pick) {
+              event.preventDefault();
+              commitPickerTag(pick.name);
+              return true;
+            }
+            // No suggestion — fall through to standard Enter behavior.
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setPickerQuery(null);
+            setPickerRange(null);
+            return true;
+          }
+        }
         // Don't intercept while a hashtag picker is open.
         if (event.key === "Enter") {
           for (const p of view.state.plugins) {
@@ -187,6 +323,28 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
       // from the editor. Multiple matches per pass are handled (paste
       // of `#a #b #c ` will lift all three on the same update).
       liftTerminatedHashtags(editor);
+      // Pick up partial `#xxx` under the cursor and show / hide the
+      // autocomplete dropdown.
+      const next = detectPickerState(editor);
+      if (next) {
+        setPickerQuery(next.query);
+        setPickerRange(next.range);
+      } else {
+        setPickerQuery(null);
+        setPickerRange(null);
+      }
+    },
+    onSelectionUpdate: ({ editor }) => {
+      // Picker visibility also follows cursor moves (arrow keys, click)
+      // without a content change.
+      const next = detectPickerState(editor);
+      if (next) {
+        setPickerQuery(next.query);
+        setPickerRange(next.range);
+      } else {
+        setPickerQuery(null);
+        setPickerRange(null);
+      }
     },
   });
 
@@ -291,7 +449,35 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
 
   return (
     <div className="border-t border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-950/95 backdrop-blur">
-      <div className="max-w-3xl mx-auto px-6 py-3">
+      <div className="max-w-3xl mx-auto px-6 py-3 relative">
+        {pickerQuery !== null && pickerSuggestions.length > 0 && (
+          <div className="absolute left-6 right-6 bottom-full mb-1 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl max-h-56 overflow-y-auto z-20">
+            {pickerSuggestions.map((s, idx) => {
+              const active = idx === pickerIdx;
+              return (
+                <button
+                  key={`${s.kind}:${s.name}`}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    commitPickerTag(s.name);
+                  }}
+                  onMouseEnter={() => setPickerIdx(idx)}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left ${
+                    active
+                      ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                      : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  <span className="font-mono">#{s.name}</span>
+                  {s.kind === "create" && (
+                    <span className="ml-auto text-[10px] text-neutral-400">new</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {pendingTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 mb-1.5 px-1">
             {pendingTags.map((t) => (
