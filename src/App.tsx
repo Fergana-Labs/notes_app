@@ -40,6 +40,7 @@ export default function App() {
   const loadUISettings = useUISettings((s) => s.load);
   const colorful = useUISettings((s) => s.colorful);
   const compact = useUISettings((s) => s.compact);
+  const hideHeaders = useUISettings((s) => s.hideHeaders);
   useEffect(() => {
     bootstrap();
     loadUISettings();
@@ -53,6 +54,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("compact", compact);
   }, [compact]);
+  useEffect(() => {
+    document.documentElement.classList.toggle("hide-headers", hideHeaders);
+  }, [hideHeaders]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

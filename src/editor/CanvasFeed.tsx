@@ -346,6 +346,8 @@ export function CanvasFeed({
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
   const runWithUndo = useWorkspace((s) => s.runWithUndo);
   const compact = useUISettings((s) => s.compact);
+  const hideHeaders = useUISettings((s) => s.hideHeaders);
+  const setHideHeaders = useUISettings((s) => s.setHideHeaders);
   const rowGap = compact ? FEED_ROW_GAP_COMPACT : FEED_ROW_GAP_COMFY;
 
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
@@ -1180,7 +1182,18 @@ export function CanvasFeed({
               ? "searching…"
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
-          <div className="mochi-sort-toggle ml-auto inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
+          <button
+            onClick={() => void setHideHeaders(!hideHeaders)}
+            title={hideHeaders ? "Show block headers" : "Hide block headers (todo-list look)"}
+            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
+              hideHeaders
+                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            }`}
+          >
+            {hideHeaders ? "List view" : "Card view"}
+          </button>
+          <div className="mochi-sort-toggle inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
             {(["canvas", "newest", "oldest"] as const).map((m) => (
               <button
                 key={m}
@@ -1545,7 +1558,7 @@ const FeedCard = memo(
             consistent anchor point). */}
         <div
           contentEditable={false}
-          className="flex items-center gap-2 px-3 pt-2 pb-1 border-b border-neutral-100 dark:border-neutral-800/60"
+          className="mochi-card-header flex items-center gap-2 px-3 pt-2 pb-1 border-b border-neutral-100 dark:border-neutral-800/60"
         >
           <input
             type="checkbox"

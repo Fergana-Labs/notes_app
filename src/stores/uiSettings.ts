@@ -13,22 +13,34 @@ interface UISettings {
    *  blocks fit on screen at once. Activated via a `.compact` class
    *  on <html>; CSS rules in index.css override the comfy defaults. */
   compact: boolean;
+  /** Hide each block card's top header (avatar/tag chips/buttons row)
+   *  so the feed reads like a tight todo list. Toggled from the feed
+   *  toolbar; persisted alongside the other view preferences. */
+  hideHeaders: boolean;
   loaded: boolean;
   load: () => Promise<void>;
   setColorful: (v: boolean) => Promise<void>;
   setCompact: (v: boolean) => Promise<void>;
+  setHideHeaders: (v: boolean) => Promise<void>;
 }
 
 export const useUISettings = create<UISettings>((set) => ({
   colorful: false,
   compact: false,
+  hideHeaders: false,
   loaded: false,
   load: async () => {
-    const [c, cm] = await Promise.all([
+    const [c, cm, hh] = await Promise.all([
       ipc.getSetting("ui.colorful"),
       ipc.getSetting("ui.compact"),
+      ipc.getSetting("ui.hide_headers"),
     ]);
-    set({ colorful: c === "true", compact: cm === "true", loaded: true });
+    set({
+      colorful: c === "true",
+      compact: cm === "true",
+      hideHeaders: hh === "true",
+      loaded: true,
+    });
   },
   setColorful: async (v) => {
     await ipc.setSetting("ui.colorful", v ? "true" : "false");
@@ -37,5 +49,9 @@ export const useUISettings = create<UISettings>((set) => ({
   setCompact: async (v) => {
     await ipc.setSetting("ui.compact", v ? "true" : "false");
     set({ compact: v });
+  },
+  setHideHeaders: async (v) => {
+    await ipc.setSetting("ui.hide_headers", v ? "true" : "false");
+    set({ hideHeaders: v });
   },
 }));
