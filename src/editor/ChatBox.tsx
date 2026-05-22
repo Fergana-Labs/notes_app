@@ -263,20 +263,13 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             const s = (p as any).getState?.(view.state);
             if (s && typeof s === "object" && (s as any).active) return false;
           }
-          if (event.shiftKey) {
-            // Shift+Enter → split paragraph.
-            event.preventDefault();
-            view.dispatch(
-              view.state.tr.split(view.state.selection.$from.pos).scrollIntoView(),
-            );
-            return true;
-          }
-          // Inside a list item / code block, let PM handle Enter natively
-          // — that's how new list items and code-block newlines work.
-          // Without this short-circuit, Enter inside `- foo` would submit
-          // instead of opening a new bullet, which made lists feel broken
-          // in the capture bar.
+          // Check list/code context once — both Shift+Enter and plain
+          // Enter need it. Inside a list, both should defer to PM so
+          // Enter opens a new bullet and Shift+Enter inserts a soft
+          // break inside the current item. Outside, Shift+Enter is a
+          // paragraph split and plain Enter submits.
           const { $from } = view.state.selection;
+          let inListOrCode = false;
           for (let d = $from.depth; d > 0; d--) {
             const n = $from.node(d);
             if (
@@ -284,9 +277,20 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
               n.type.name === "codeBlock" ||
               n.type.name === "taskItem"
             ) {
-              return false;
+              inListOrCode = true;
+              break;
             }
           }
+          if (event.shiftKey) {
+            if (inListOrCode) return false;
+            // Shift+Enter outside a list → split paragraph.
+            event.preventDefault();
+            view.dispatch(
+              view.state.tr.split(view.state.selection.$from.pos).scrollIntoView(),
+            );
+            return true;
+          }
+          if (inListOrCode) return false;
           // Plain Enter → submit.
           event.preventDefault();
           submit();
