@@ -44,7 +44,7 @@ import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import type { Node as PMNode } from "@tiptap/pm/model";
+import { Fragment, type Node as PMNode } from "@tiptap/pm/model";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
@@ -266,26 +266,44 @@ function useVirtualRows<T extends { id: string }>(
  * paragraphs across the round-trip. Plain markdown has no syntax
  * for "an empty paragraph" — consecutive blank lines collapse — so
  * tiptap-markdown's default serializer drops them and the user
- * loses intentional whitespace on save. We walk the top-level doc
- * nodes ourselves: empty paragraphs become a single U+00A0 (NBSP)
- * line, everything else serializes normally. NBSP isn't whitespace
- * by CommonMark spec, so the paragraph survives markdown → PM and
- * the empty line reappears on reload.
+ * loses intentional whitespace on save.
+ *
+ * Build a Fragment containing the same top-level children, with
+ * empty paragraphs swapped for paragraphs that hold a single NBSP
+ * (U+00A0). NBSP isn't whitespace by CommonMark spec, so the
+ * paragraph survives markdown -> PM and the empty line reappears
+ * on reload. Serialize the whole Fragment in one call —
+ * serializer.serialize(node) on each child individually strips block
+ * wrapping syntax (heading "# ", list "- ", code fences) because
+ * the serializer's renderContent iterates the children of what you
+ * pass rather than treating it as a sibling at the doc level.
  */
 function getMarkdownPreservingEmptyParas(ed: Editor): string {
   const serializer = (ed.storage as any).markdown?.serializer;
   if (!serializer) {
     return (ed.storage as any).markdown?.getMarkdown?.() ?? "";
   }
-  const parts: string[] = [];
-  ed.state.doc.content.forEach((node) => {
+  const doc = ed.state.doc;
+  const schema = doc.type.schema;
+  const paraType = schema.nodes.paragraph;
+  if (!paraType) return serializer.serialize(doc);
+  let needsTransform = false;
+  doc.content.forEach((node) => {
     if (node.type.name === "paragraph" && node.textContent.length === 0) {
-      parts.push(" ");
-    } else {
-      parts.push(serializer.serialize(node));
+      needsTransform = true;
     }
   });
-  return parts.join("\n\n");
+  if (!needsTransform) return serializer.serialize(doc);
+  const NBSP = String.fromCharCode(0xa0);
+  const children: PMNode[] = [];
+  doc.content.forEach((node) => {
+    if (node.type.name === "paragraph" && node.textContent.length === 0) {
+      children.push(paraType.create({}, schema.text(NBSP)));
+    } else {
+      children.push(node);
+    }
+  });
+  return serializer.serialize(Fragment.from(children));
 }
 
 function virtualRowStyle(start: number, gap: number): React.CSSProperties {
