@@ -387,6 +387,10 @@ export function CanvasFeed({
   // the old TagsView pattern.
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searching, setSearching] = useState(false);
+  // Titles-only view: filter to blocks with a non-empty title and
+  // render each as a compact one-line row. Toggled per session from
+  // the toolbar; not persisted (cmd-toggle while browsing).
+  const [titlesOnly, setTitlesOnly] = useState(false);
 
   useEffect(() => {
     const q = searchQuery.trim();
@@ -435,6 +439,9 @@ export function CanvasFeed({
       const to = dateRange.to ?? Infinity;
       arr = arr.filter((b) => b.updated_at >= from && b.updated_at < to);
     }
+    if (titlesOnly) {
+      arr = arr.filter((b) => (b.title ?? "").trim().length > 0);
+    }
     if (sort === "newest")
       arr = [...arr].sort((a, b) => b.updated_at - a.updated_at);
     else if (sort === "oldest")
@@ -456,6 +463,7 @@ export function CanvasFeed({
     focusedBlockId,
     dateRange.from,
     dateRange.to,
+    titlesOnly,
   ]);
 
   // Drop selections whose blocks are no longer visible (filter changed,
@@ -1221,9 +1229,20 @@ export function CanvasFeed({
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
           <button
+            onClick={() => setTitlesOnly((v) => !v)}
+            title={titlesOnly ? "Show full blocks" : "Show only blocks with titles"}
+            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
+              titlesOnly
+                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            }`}
+          >
+            {titlesOnly ? "Titles only" : "All blocks"}
+          </button>
+          <button
             onClick={() => void setHideHeaders(!hideHeaders)}
             title={hideHeaders ? "Show block headers" : "Hide block headers (todo-list look)"}
-            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
+            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
               hideHeaders
                 ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
                 : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -1363,6 +1382,9 @@ export function CanvasFeed({
                 ref={(el) => measureElement(b.id, el)}
                 style={virtualRowStyle(start, rowGap)}
               >
+              {titlesOnly ? (
+                <TitleRow block={b} onExpand={() => setExpandedId(b.id)} />
+              ) : (
               <FeedCard
                 block={b}
                 pendingFocus={
@@ -1390,6 +1412,7 @@ export function CanvasFeed({
                 onExpand={() => setExpandedId(b.id)}
                 onSplitAtCursor={(ed) => splitBlockAtCursor(b, ed)}
               />
+              )}
               </div>
             ))}
             </div>
@@ -1840,6 +1863,41 @@ const FeedCard = memo(
     prev.highlightCaseSensitive === next.highlightCaseSensitive &&
     prev.isActiveSearchHit === next.isActiveSearchHit,
 );
+
+/**
+ * Compact one-line row for the titles-only view. Click opens the
+ * full editor in fullscreen so the user can read or edit the body.
+ */
+function TitleRow({
+  block,
+  onExpand,
+}: {
+  block: StoredBlock;
+  onExpand: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onExpand}
+      className="w-full text-left px-3 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
+    >
+      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate flex-1">
+        {block.title ?? "Untitled"}
+      </span>
+      {block.tags.slice(0, 3).map((t) => (
+        <span
+          key={t}
+          className="px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-[10px] font-medium shrink-0"
+        >
+          #{t}
+        </span>
+      ))}
+      <span className="text-[11px] text-neutral-400 shrink-0 tabular-nums">
+        {relativeTime(block.updated_at)}
+      </span>
+    </button>
+  );
+}
 
 /**
  * Editable title field for a block. Renders as an unstyled inline
