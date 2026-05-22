@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, FolderPlus } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderPlus, Plus } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
 import { ipc, type TagCount } from "../lib/ipc";
 import { TagContextMenu } from "./TagContextMenu";
@@ -75,6 +75,7 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
     new Set(),
   );
   const [newFolderDraft, setNewFolderDraft] = useState<string | null>(null);
+  const [newTagDraft, setNewTagDraft] = useState<string | null>(null);
   const [folderContextMenu, setFolderContextMenu] = useState<{
     name: string;
     x: number;
@@ -395,6 +396,27 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
     });
   };
 
+  // Create an empty tag from the sidebar. Goes through setTagDescription
+  // with an empty description string — that upserts the `tags` row, which
+  // makes it count = 0 in `list_tags` and appear in the sidebar. The
+  // user can then drag blocks into the tag or assign it from a card.
+  const commitNewTag = async (name: string) => {
+    const t = name.trim().toLowerCase().replace(/^#/, "");
+    if (!t) {
+      setNewTagDraft(null);
+      return;
+    }
+    if (!/^[A-Za-z][A-Za-z0-9_\-/]*$/.test(t)) {
+      window.alert(
+        `Invalid tag name: "${t}". Tags must start with a letter and use only letters, digits, underscore, dash, or slash.`,
+      );
+      return;
+    }
+    await ipc.setTagDescription(t, "");
+    await refreshTags();
+    setNewTagDraft(null);
+  };
+
   const commitNewFolder = async (name: string) => {
     const n = name.trim();
     if (!n) {
@@ -452,6 +474,13 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
           <span>All blocks</span>
         </button>
         <button
+          onClick={() => setNewTagDraft("")}
+          title="New tag"
+          className="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        >
+          <Plus size={14} />
+        </button>
+        <button
           onClick={() => setNewFolderDraft("")}
           title="New folder"
           className="p-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -459,6 +488,29 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
           <FolderPlus size={14} />
         </button>
       </div>
+
+      {newTagDraft !== null && (
+        <div className="flex items-center gap-1 px-2 py-1 text-sm rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950">
+          <span className="text-neutral-400">#</span>
+          <input
+            autoFocus
+            value={newTagDraft}
+            onChange={(e) => setNewTagDraft(e.target.value.replace(/^#/, ""))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void commitNewTag(newTagDraft);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setNewTagDraft(null);
+              }
+            }}
+            onBlur={() => void commitNewTag(newTagDraft)}
+            placeholder="tag-name"
+            className="flex-1 outline-none bg-transparent"
+          />
+        </div>
+      )}
 
       {newFolderDraft !== null && (
         <input
