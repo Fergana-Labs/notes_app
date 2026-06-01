@@ -55,6 +55,10 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   useEffect(() => {
     blocksRef.current = blocks;
   }, [blocks]);
+  const tagFilterRef = useRef(tagFilter);
+  useEffect(() => {
+    tagFilterRef.current = tagFilter;
+  }, [tagFilter]);
   const fullscreenRef = useRef(fullscreen);
   useEffect(() => {
     fullscreenRef.current = fullscreen;
@@ -131,10 +135,15 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   // send the note to all blocks, or add more tags. We track which chip we
   // injected so switching tags swaps it without clobbering manual chips.
   const autoTagRef = useRef<string | null>(null);
+  // Set when the user backspaces the auto pill away, so a stray refocus
+  // doesn't immediately re-seed it mid-composition. Cleared on submit and
+  // when the active tag changes.
+  const tagDismissedRef = useRef(false);
   useEffect(() => {
     const tf = tagFilter ? tagFilter.toLowerCase() : null;
     const prevAuto = autoTagRef.current;
     if (prevAuto === tf) return;
+    tagDismissedRef.current = false;
     setPendingTags((prev) => {
       let next = prev;
       if (prevAuto) next = next.filter((t) => t !== prevAuto);
@@ -143,6 +152,17 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     });
     autoTagRef.current = tf;
   }, [tagFilter]);
+
+  // Re-seed the current tag as a pill when focusing a fresh (empty)
+  // capture — so the default "goes to this tag" survives after a submit
+  // cleared the chips. Skipped if the user just dismissed it.
+  const seedTagOnFocus = () => {
+    const tf = tagFilterRef.current ? tagFilterRef.current.toLowerCase() : null;
+    if (!tf || tagDismissedRef.current) return;
+    if (!editor || editor.state.doc.textContent.trim().length > 0) return;
+    setPendingTags((prev) => (prev.includes(tf) ? prev : [...prev, tf]));
+    autoTagRef.current = tf;
+  };
 
   // Inline tag autocomplete. When the cursor sits inside a partial
   // `#xxx` token, `pickerQuery` holds the typed text (after the `#`)
@@ -362,10 +382,11 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           submit();
           return true;
         }
-        // Backspace at the very start of an empty editor pops the
-        // most-recent chip back into the input so the user can edit
-        // or re-lift it. Mirrors how chip-based inputs (email To: rows,
-        // tag inputs) typically behave.
+        // Backspace at the very start of an empty editor removes the
+        // most-recent chip. For the auto-seeded tag pill this is how the
+        // user sends a capture to "all blocks" instead of the current
+        // tag; remember the removal so focus doesn't immediately re-seed
+        // it (see onFocus below).
         if (event.key === "Backspace") {
           const { selection, doc } = view.state;
           const empty =
@@ -377,9 +398,7 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             event.preventDefault();
             const last = chips[chips.length - 1];
             setPendingTags(chips.slice(0, -1));
-            view.dispatch(
-              view.state.tr.insertText(`#${last}`).scrollIntoView(),
-            );
+            if (autoTagRef.current === last) tagDismissedRef.current = true;
             return true;
           }
         }
@@ -415,6 +434,10 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
         setPickerQuery(null);
         setPickerRange(null);
       }
+    },
+    onFocus: () => {
+      // Default a fresh capture to the tag you're viewing.
+      seedTagOnFocus();
     },
   });
 
@@ -512,6 +535,7 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           [],
         );
         setPendingTags([]);
+        tagDismissedRef.current = false;
         editor.commands.clearContent();
         editor.commands.focus();
         return;
@@ -550,6 +574,7 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     );
 
     setPendingTags([]);
+    tagDismissedRef.current = false;
     editor.commands.clearContent();
     editor.commands.focus();
   };
