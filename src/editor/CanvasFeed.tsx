@@ -1990,7 +1990,7 @@ function BlockTitleField({
         }
       }}
       placeholder="Untitled"
-      className="shrink-0 min-w-0 w-32 max-w-[14rem] bg-transparent outline-none border-b border-transparent focus:border-neutral-300 dark:focus:border-neutral-700 text-xs font-medium text-neutral-700 dark:text-neutral-200 placeholder:text-neutral-400 placeholder:italic placeholder:font-normal"
+      className="shrink-0 min-w-0 w-32 max-w-[14rem] bg-transparent outline-none border-b border-transparent focus:border-neutral-300 dark:focus:border-neutral-700 text-xs font-bold text-neutral-800 dark:text-neutral-100 placeholder:text-neutral-400 placeholder:italic placeholder:font-normal"
       title={title ? `Title: ${title}` : "Set a title for this block"}
     />
   );
@@ -2353,7 +2353,11 @@ function TagChipStrip({
   onRemove: (tag: string) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
+    // ml-auto pushes the tag strip (and the timestamp/buttons after it)
+    // to the right edge of the header, so tags are right-aligned rather
+    // than packed against the title. justify-end keeps chips right-aligned
+    // when they wrap.
+    <div className="flex flex-wrap items-center justify-end gap-1 min-w-0 ml-auto">
       {tags.map((t) => (
         <span
           key={t}
