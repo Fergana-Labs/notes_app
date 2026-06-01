@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ulid } from "ulid";
 import type { Editor } from "@tiptap/core";
 import { splitListItem } from "@tiptap/pm/schema-list";
-import { Send, X } from "lucide-react";
+import { Send, X, ChevronDown, CornerDownRight, FilePlus2 } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
 import { useChatSettings } from "../stores/chatSettings";
 import { useUISettings } from "../stores/uiSettings";
@@ -80,6 +80,45 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   useEffect(() => {
     pendingTagsRef.current = pendingTags;
   }, [pendingTags]);
+
+  // Capture target. null = create a new note (default). A block id =
+  // append the captured text to that recently-edited note instead.
+  const [appendTargetId, setAppendTargetId] = useState<string | null>(null);
+  const appendTargetIdRef = useRef(appendTargetId);
+  useEffect(() => {
+    appendTargetIdRef.current = appendTargetId;
+  }, [appendTargetId]);
+  const [showTargetMenu, setShowTargetMenu] = useState(false);
+
+  // Recently-edited notes for the target dropdown.
+  const recentNotes = useMemo(
+    () =>
+      [...blocks]
+        .filter((b) => b.content.trim() || (b.title ?? "").trim())
+        .sort((a, b) => b.updated_at - a.updated_at)
+        .slice(0, 8),
+    [blocks],
+  );
+  const noteLabel = (b: { title: string | null; content: string }): string => {
+    const title = (b.title ?? "").trim();
+    if (title) return title;
+    for (const raw of b.content.split("\n")) {
+      const line = raw.trim();
+      if (line && line !== " ") {
+        return line
+          .replace(/^#{1,6}\s+/, "")
+          .replace(/^[-*+]\s+\[[ xX]\]\s+/, "")
+          .replace(/^[-*+]\s+/, "")
+          .replace(/^\d+\.\s+/, "")
+          .replace(/^>\s?/, "")
+          .slice(0, 60);
+      }
+    }
+    return "Untitled";
+  };
+  const targetNote = appendTargetId
+    ? blocks.find((b) => b.id === appendTargetId) ?? null
+    : null;
 
   const addPendingTag = (raw: string) => {
     const t = raw.trim().toLowerCase().replace(/^#/, "");
@@ -432,6 +471,40 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
       explicitTags.push(tagFilterRef.current);
     }
 
+    // Append-to-note mode: when a target is selected, fold the captured
+    // text onto that note instead of minting a new card. Falls through to
+    // new-block creation if the target was deleted in the meantime.
+    const targetId = appendTargetIdRef.current;
+    if (targetId) {
+      const target = blocksRef.current.find((b) => b.id === targetId);
+      if (target) {
+        const merged = target.content.trim()
+          ? `${target.content}\n\n${cleaned}`
+          : cleaned;
+        const tags = Array.from(new Set([...target.tags, ...explicitTags]));
+        await saveSnapshot(
+          [
+            {
+              id: target.id,
+              content: merged,
+              position: target.position,
+              parent_id: target.parent_id,
+              heading: target.heading,
+              heading_level: target.heading_level,
+              tags,
+            },
+          ],
+          [],
+        );
+        setPendingTags([]);
+        editor.commands.clearContent();
+        editor.commands.focus();
+        return;
+      }
+      // Target gone — drop back to new-note behavior.
+      setAppendTargetId(null);
+    }
+
     const all = [...blocksRef.current].sort((a, b) => a.position - b.position);
     const newId = ulid();
     let position: number;
@@ -522,10 +595,79 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
             <EditorContent editor={editor} />
           </div>
 
-          <div className="flex items-center gap-0.5 px-2 py-2 shrink-0">
+          <div className="flex items-center gap-1 px-2 py-2 shrink-0">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowTargetMenu((v) => !v)}
+                title={
+                  targetNote
+                    ? `Appending to "${noteLabel(targetNote)}" — Enter adds to it`
+                    : "Capture as a new note (click to append to a recent note instead)"
+                }
+                className={`flex items-center gap-1 max-w-[11rem] px-1.5 py-1 rounded text-xs ${
+                  targetNote
+                    ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                    : "text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                }`}
+              >
+                {targetNote ? (
+                  <CornerDownRight size={13} className="shrink-0" />
+                ) : (
+                  <FilePlus2 size={13} className="shrink-0" />
+                )}
+                <span className="truncate">
+                  {targetNote ? noteLabel(targetNote) : "New note"}
+                </span>
+                <ChevronDown size={10} className="shrink-0" />
+              </button>
+              {showTargetMenu && (
+                <div
+                  className="absolute bottom-full right-0 mb-1 w-64 max-h-72 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl py-1 z-20 text-xs"
+                  onMouseLeave={() => setShowTargetMenu(false)}
+                >
+                  <button
+                    onClick={() => {
+                      setAppendTargetId(null);
+                      setShowTargetMenu(false);
+                    }}
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 ${
+                      !appendTargetId
+                        ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                        : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                    }`}
+                  >
+                    <FilePlus2 size={12} className="shrink-0" />
+                    New note
+                  </button>
+                  {recentNotes.length > 0 && (
+                    <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-neutral-400">
+                      Append to recent
+                    </div>
+                  )}
+                  {recentNotes.map((b) => (
+                    <button
+                      key={b.id}
+                      onClick={() => {
+                        setAppendTargetId(b.id);
+                        setShowTargetMenu(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 text-left ${
+                        appendTargetId === b.id
+                          ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                          : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      }`}
+                    >
+                      <CornerDownRight size={12} className="shrink-0" />
+                      <span className="truncate">{noteLabel(b)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={submit}
-              title="Add as new block (Enter)"
+              title={targetNote ? "Append to note (Enter)" : "Add as new block (Enter)"}
               className={`flex items-center justify-center w-7 h-7 rounded-full text-white transition-colors ${
                 colorful
                   ? "bg-[#87a970] hover:bg-[#7a9c64] active:bg-[#6d8f58]"
