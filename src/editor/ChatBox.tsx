@@ -55,10 +55,6 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   useEffect(() => {
     blocksRef.current = blocks;
   }, [blocks]);
-  const tagFilterRef = useRef(tagFilter);
-  useEffect(() => {
-    tagFilterRef.current = tagFilter;
-  }, [tagFilter]);
   const fullscreenRef = useRef(fullscreen);
   useEffect(() => {
     fullscreenRef.current = fullscreen;
@@ -129,6 +125,24 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   const removePendingTag = (tag: string) => {
     setPendingTags((prev) => prev.filter((t) => t !== tag));
   };
+
+  // Auto-seed the current tag as a (removable) chip when viewing a tag, so
+  // captures land in that tag by default — the user can remove the chip to
+  // send the note to all blocks, or add more tags. We track which chip we
+  // injected so switching tags swaps it without clobbering manual chips.
+  const autoTagRef = useRef<string | null>(null);
+  useEffect(() => {
+    const tf = tagFilter ? tagFilter.toLowerCase() : null;
+    const prevAuto = autoTagRef.current;
+    if (prevAuto === tf) return;
+    setPendingTags((prev) => {
+      let next = prev;
+      if (prevAuto) next = next.filter((t) => t !== prevAuto);
+      if (tf && !next.includes(tf)) next = [...next, tf];
+      return next;
+    });
+    autoTagRef.current = tf;
+  }, [tagFilter]);
 
   // Inline tag autocomplete. When the cursor sits inside a partial
   // `#xxx` token, `pickerQuery` holds the typed text (after the `#`)
@@ -463,12 +477,13 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     // active tag filter (so the new block lands in the narrowed view
     // when one is set). Inline hashtags still in `cleaned` are
     // extracted server-side and merged automatically.
+    // The active tag (when viewing one) is surfaced as a removable chip in
+    // `pendingTags`, so it flows through here automatically — no implicit
+    // push. Removing that chip is how the user sends a capture to all
+    // blocks instead of the current tag.
     const explicitTags: string[] = [];
     for (const t of chips) {
       if (!explicitTags.includes(t)) explicitTags.push(t);
-    }
-    if (tagFilterRef.current && !explicitTags.includes(tagFilterRef.current)) {
-      explicitTags.push(tagFilterRef.current);
     }
 
     // Append-to-note mode: when a target is selected, fold the captured
