@@ -42,7 +42,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { type Node as PMNode } from "@tiptap/pm/model";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -2735,10 +2735,26 @@ const CrossBlockNav = Extension.create<CrossBlockNavOptions>({
       // Returning false lets PM run its native split behavior.
       Backspace: () => {
         const { state } = this.editor;
-        const { selection } = state;
+        const { selection, doc } = state;
         if (!selection.empty) return false;
         // At position 1 = inside the very first text node, at offset 0.
         if (selection.$head.pos !== 1) return false;
+        // A blank leading line (truly empty OR an NBSP-only "empty line")
+        // with more content below should just be deleted — the cursor
+        // drops to the start of the next line — rather than merging this
+        // whole card up into the one above. Merge-up only when there's
+        // nothing below to fall onto (single block / no blank top line).
+        const first = doc.firstChild;
+        const firstIsBlankLine =
+          !!first &&
+          first.type.name === "paragraph" &&
+          first.textContent.trim().length === 0;
+        if (firstIsBlankLine && doc.childCount > 1) {
+          const tr = state.tr.delete(0, first!.nodeSize);
+          tr.setSelection(TextSelection.create(tr.doc, 1)).scrollIntoView();
+          this.editor.view.dispatch(tr);
+          return true;
+        }
         this.options.onMergeUp();
         return true;
       },
