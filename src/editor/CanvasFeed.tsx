@@ -351,8 +351,9 @@ export function CanvasFeed({
   const saveSnapshot = useWorkspace((s) => s.saveSnapshot);
   const runWithUndo = useWorkspace((s) => s.runWithUndo);
   const compact = useUISettings((s) => s.compact);
-  const hideHeaders = useUISettings((s) => s.hideHeaders);
-  const setHideHeaders = useUISettings((s) => s.setHideHeaders);
+  const viewMode = useUISettings((s) => s.viewMode);
+  const setViewMode = useUISettings((s) => s.setViewMode);
+  const listView = viewMode === "list";
   const rowGap = compact ? FEED_ROW_GAP_COMPACT : FEED_ROW_GAP_COMFY;
 
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
@@ -365,11 +366,6 @@ export function CanvasFeed({
   // the old TagsView pattern.
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searching, setSearching] = useState(false);
-  // Titles-only view: filter to blocks with a non-empty title and
-  // render each as a compact one-line row. Toggled per session from
-  // the toolbar; not persisted (cmd-toggle while browsing).
-  const [titlesOnly, setTitlesOnly] = useState(false);
-
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
@@ -417,9 +413,6 @@ export function CanvasFeed({
       const to = dateRange.to ?? Infinity;
       arr = arr.filter((b) => b.updated_at >= from && b.updated_at < to);
     }
-    if (titlesOnly) {
-      arr = arr.filter((b) => (b.title ?? "").trim().length > 0);
-    }
     if (sort === "newest")
       arr = [...arr].sort((a, b) => b.updated_at - a.updated_at);
     else if (sort === "oldest")
@@ -444,7 +437,6 @@ export function CanvasFeed({
     focusedBlockId,
     dateRange.from,
     dateRange.to,
-    titlesOnly,
   ]);
 
   // Drop selections whose blocks are no longer visible (filter changed,
@@ -1152,6 +1144,7 @@ export function CanvasFeed({
     sort,
     searchQuery,
     selected.size,
+    viewMode,
   ].join(":");
   const { totalSize, virtualItems, measureElement } = useVirtualRows(
     sorted,
@@ -1236,28 +1229,34 @@ export function CanvasFeed({
               ? "searching…"
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
-          <button
-            onClick={() => setTitlesOnly((v) => !v)}
-            title={titlesOnly ? "Show full blocks" : "Show only blocks with titles"}
-            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
-              titlesOnly
-                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {titlesOnly ? "Titles only" : "All blocks"}
-          </button>
-          <button
-            onClick={() => void setHideHeaders(!hideHeaders)}
-            title={hideHeaders ? "Show block headers" : "Hide block headers (todo-list look)"}
-            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
-              hideHeaders
-                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {hideHeaders ? "List view" : "Card view"}
-          </button>
+          <div className="mochi-view-toggle ml-auto inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
+            {(
+              [
+                ["card", "Card"],
+                ["note", "Note"],
+                ["list", "List"],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                onClick={() => void setViewMode(mode)}
+                title={
+                  mode === "card"
+                    ? "Full cards with header bar"
+                    : mode === "note"
+                      ? "Body text only, no header"
+                      : "One row per note: title + first line"
+                }
+                className={`px-2 py-1 ${
+                  viewMode === mode
+                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                    : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="mochi-sort-toggle inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
             {(["canvas", "newest", "oldest"] as const).map((m) => (
               <button
@@ -1390,7 +1389,7 @@ export function CanvasFeed({
                 ref={(el) => measureElement(b.id, el)}
                 style={virtualRowStyle(start, rowGap)}
               >
-              {titlesOnly ? (
+              {listView ? (
                 <TitleRow block={b} onExpand={() => setExpandedId(b.id)} />
               ) : (
               <FeedCard
@@ -1887,8 +1886,29 @@ const FeedCard = memo(
 );
 
 /**
- * Compact one-line row for the titles-only view. Click opens the
- * full editor in fullscreen so the user can read or edit the body.
+ * First non-blank line of a block's content, with the leading markdown
+ * marker (heading `#`, bullet, number, task checkbox, quote) stripped so
+ * the list-view preview reads as plain prose.
+ */
+function firstContentLine(content: string): string {
+  for (const raw of content.split("\n")) {
+    const line = raw.trim();
+    if (!line || line === " ") continue;
+    return line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*+]\s+\[[ xX]\]\s+/, "")
+      .replace(/^[-*+]\s+/, "")
+      .replace(/^\d+\.\s+/, "")
+      .replace(/^>\s?/, "")
+      .replace(/^```.*$/, "");
+  }
+  return "";
+}
+
+/**
+ * Compact one-line row for the list view. Shows the note's title (bold)
+ * when set, otherwise the first content line, plus the first body line
+ * as a muted preview. Click opens the full editor in fullscreen.
  */
 function TitleRow({
   block,
@@ -1897,14 +1917,27 @@ function TitleRow({
   block: StoredBlock;
   onExpand: () => void;
 }) {
+  const first = firstContentLine(block.content);
+  const title = (block.title ?? "").trim();
+  // Primary text = title if present, else the first line. Preview =
+  // first body line, shown only when it isn't already the primary text.
+  const primary = title || first || "Untitled";
+  const preview = title ? first : "";
   return (
     <button
       type="button"
       onClick={onExpand}
       className="w-full text-left px-3 py-1.5 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2"
     >
-      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200 truncate flex-1">
-        {block.title ?? "Untitled"}
+      <span className="flex items-baseline gap-2 min-w-0 flex-1">
+        <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-200 truncate shrink-0 max-w-[60%]">
+          {primary}
+        </span>
+        {preview && (
+          <span className="text-sm text-neutral-400 dark:text-neutral-500 truncate">
+            {preview}
+          </span>
+        )}
       </span>
       {block.tags.slice(0, 3).map((t) => (
         <span

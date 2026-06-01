@@ -40,7 +40,7 @@ export default function App() {
   const loadUISettings = useUISettings((s) => s.load);
   const colorful = useUISettings((s) => s.colorful);
   const compact = useUISettings((s) => s.compact);
-  const hideHeaders = useUISettings((s) => s.hideHeaders);
+  const hideHeaders = useUISettings((s) => s.viewMode === "note");
   useEffect(() => {
     bootstrap();
     loadUISettings();
