@@ -1,6 +1,6 @@
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import type { Slice } from "@tiptap/pm/model";
+import { DOMParser as PMDOMParser, type Slice } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 
 const key = new PluginKey("mochiClipboardSerialize");
@@ -84,7 +84,7 @@ export const ClipboardSerialize = Extension.create({
           handleDOMEvents: {
             copy: (view, event) => writeClipboard(view, event as ClipboardEvent, false),
             cut: (view, event) => writeClipboard(view, event as ClipboardEvent, true),
-            paste: (_view, event) => {
+            paste: (view, event) => {
               const cd = (event as ClipboardEvent).clipboardData;
               if (!cd) return false;
               if (Array.from(cd.types).includes("Files")) return false;
@@ -94,7 +94,6 @@ export const ClipboardSerialize = Extension.create({
               if (!text || !/\n[ \t]*\n/.test(text)) return false;
               const parser = (editor.storage as any).markdown?.parser;
               if (!parser) return false;
-              event.preventDefault();
               // Each blank line → one NBSP paragraph so the empty row is
               // preserved (a run of N newlines separates with N-1 blanks).
               const transformed = text.replace(/(\n[ \t]*){2,}/g, (m) => {
@@ -102,14 +101,22 @@ export const ClipboardSerialize = Extension.create({
                 const blanks = Math.max(0, newlines - 1);
                 return "\n\n" + `${NBSP}\n\n`.repeat(blanks);
               });
-              const html: string = parser.parse(transformed);
-              editor
-                .chain()
-                .focus()
-                .insertContent(html, {
-                  parseOptions: { preserveWhitespace: "full" },
-                })
-                .run();
+              let html: string;
+              try {
+                html = parser.parse(transformed);
+              } catch {
+                return false; // fall back to default paste
+              }
+              // Parse the markdown-rendered HTML into a real ProseMirror
+              // slice and insert it. (insertContent on an HTML *string*
+              // was landing the markup as literal text.)
+              const dom = document.createElement("div");
+              dom.innerHTML = html;
+              const slice = PMDOMParser.fromSchema(
+                view.state.schema,
+              ).parseSlice(dom, { preserveWhitespace: true });
+              event.preventDefault();
+              view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
               return true;
             },
           },
