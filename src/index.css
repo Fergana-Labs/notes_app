@@ -89,13 +89,22 @@ html, body, #root {
   gap: 0.5rem;
   align-items: flex-start;
 }
+/* Center the checkbox against the first line of the item (rather than
+   pinning it to the very top, which left the text sitting slightly
+   above the box). The label is a one-line-tall flexbox so the checkbox
+   centers within that line even when the item wraps to multiple lines. */
 .ProseMirror ul[data-type="taskList"] li > label {
-  margin-top: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  height: 1.5em;
   user-select: none;
 }
 .ProseMirror ul[data-type="taskList"] li > div {
   flex: 1;
   min-width: 0;
+}
+.ProseMirror ul[data-type="taskList"] li > div > p {
+  line-height: 1.5;
 }
 .ProseMirror ul[data-type="taskList"] input[type="checkbox"] {
   cursor: pointer;
