@@ -67,6 +67,7 @@ import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import { FindInNote } from "./extensions/FindInNote";
+import { useHashtagPicker } from "./useHashtagPicker";
 import {
   setActiveEditor,
   clearActiveEditorIf,
@@ -2121,6 +2122,13 @@ function EditableBody({
   // returns to normal text-undo behavior.
   const lastActionWasLiftRef = useRef(false);
 
+  // Inline `#tag` autocomplete picker. The editor's synchronous key /
+  // update handlers (closed over at creation) call through these refs so
+  // they always reach the live hook instance.
+  const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
+  const pickerSyncRef = useRef<(ed: Editor) => void>(() => {});
+  const pickerCloseRef = useRef<() => void>(() => {});
+
   const onMergeUpRef = useRef(onMergeUp);
   const onFocusNeighborRef = useRef(onFocusNeighbor);
   const onAppendBelowRef = useRef(onAppendBelow);
@@ -2255,6 +2263,9 @@ function EditableBody({
     autofocus: false,
     editorProps: {
       handleKeyDown(_view, event) {
+        // Tag autocomplete picker first — it owns arrows / Enter / Esc
+        // while a `#partial` token is under the cursor.
+        if (pickerKeyDownRef.current(event)) return true;
         // Intercept Mod-Z when the most recent action was a hashtag
         // lift — pop that lift off the workspace undo stack instead
         // of running Tiptap's text undo. The lifted hashtag text is
@@ -2299,6 +2310,8 @@ function EditableBody({
       // the merged tag set — the debounced path would race with the
       // next keystroke and could re-introduce the tag from prior state.
       const b = blockRef.current;
+      // Keep the `#tag` autocomplete dropdown in sync with the cursor.
+      pickerSyncRef.current(editor);
       const lifted = liftHashtagsFromEditor(editor, b.tags);
       if (lifted.length > 0) {
         saveDebounced.cancel();
@@ -2341,6 +2354,8 @@ function EditableBody({
     onSelectionUpdate: ({ editor }) => {
       // Remember the caret so an app-switch can restore it on return.
       rememberSelection(editor);
+      // Keep the `#tag` autocomplete dropdown in sync with the cursor.
+      pickerSyncRef.current(editor);
       // Pair to onUpdate above: doc-changes-only would miss the
       // "user moved cursor out of a tag without typing more"
       // case (arrow keys, mouse click). When that happens, fire a
@@ -2364,8 +2379,17 @@ function EditableBody({
       saveDebounced(md);
       saveDebounced.flush();
       clearActiveEditorIf(editor);
+      pickerCloseRef.current();
     },
   });
+
+  // `#tag` autocomplete picker bound to this card's editor.
+  const picker = useHashtagPicker(editor);
+  useEffect(() => {
+    pickerKeyDownRef.current = picker.handleKeyDown;
+    pickerSyncRef.current = picker.sync;
+    pickerCloseRef.current = picker.close;
+  }, [picker.handleKeyDown, picker.sync, picker.close]);
 
   // Pump search-query updates into the editor's SearchHighlightPerCard
   // plugin via setMeta. Avoids re-creating the editor when the query
@@ -2411,6 +2435,7 @@ function EditableBody({
     <div className="text-sm">
       <BlockBubbleMenu editor={editor} />
       <EditorContent editor={editor} />
+      {picker.dropdown}
     </div>
   );
 }
@@ -3335,6 +3360,10 @@ function ExpandedBlockEditor({
     saveSnapshotRef.current = saveSnapshot;
   }, [saveSnapshot]);
 
+  const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
+  const pickerSyncRef = useRef<(ed: Editor) => void>(() => {});
+  const pickerCloseRef = useRef<() => void>(() => {});
+
   const saveDebounced = useMemo(
     () =>
       debounce((md: string) => {
@@ -3392,7 +3421,13 @@ function ExpandedBlockEditor({
     ],
     content: block?.content ?? "",
     autofocus: "end",
+    editorProps: {
+      handleKeyDown(_view, event) {
+        return pickerKeyDownRef.current(event);
+      },
+    },
     onUpdate: ({ editor }) => {
+      pickerSyncRef.current(editor);
       // Same in-progress-tag skip as the inline editor — see comment
       // there. Prevents partial `#q` from saving as a real `q` tag.
       if (cursorInsideHashtag(editor)) {
@@ -3404,6 +3439,7 @@ function ExpandedBlockEditor({
     },
     onSelectionUpdate: ({ editor }) => {
       rememberSelection(editor);
+      pickerSyncRef.current(editor);
       if (cursorInsideHashtag(editor)) return;
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
@@ -3418,8 +3454,17 @@ function ExpandedBlockEditor({
       saveDebounced(md);
       saveDebounced.flush();
       clearActiveEditorIf(editor);
+      pickerCloseRef.current();
     },
   });
+
+  // `#tag` autocomplete picker bound to the fullscreen editor.
+  const picker = useHashtagPicker(editor);
+  useEffect(() => {
+    pickerKeyDownRef.current = picker.handleKeyDown;
+    pickerSyncRef.current = picker.sync;
+    pickerCloseRef.current = picker.close;
+  }, [picker.handleKeyDown, picker.sync, picker.close]);
 
   // External content updates (e.g. inline edit while modal open) — refresh
   // the modal editor only when it isn't currently focused, so we don't
@@ -3491,6 +3536,7 @@ function ExpandedBlockEditor({
           />
           <BlockBubbleMenu editor={editor} />
           <EditorContent editor={editor} />
+          {picker.dropdown}
         </div>
       </div>
     </div>
