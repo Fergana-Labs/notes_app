@@ -10,6 +10,7 @@ import {
   Link as LinkIcon,
   ChevronDown,
   Type as TypeIcon,
+  ListChecks,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -36,6 +37,7 @@ const EMPTY_MENU_STATE = {
   underline: false,
   strike: false,
   code: false,
+  task: false,
   link: false,
   href: "",
 };
@@ -52,6 +54,7 @@ function menuStateEq(a: MenuState, b: MenuState | null): boolean {
     a.underline === b.underline &&
     a.strike === b.strike &&
     a.code === b.code &&
+    a.task === b.task &&
     a.link === b.link &&
     a.href === b.href
   );
@@ -93,6 +96,7 @@ export function BlockBubbleMenu({ editor }: Props) {
           underline: e.isActive("underline"),
           strike: e.isActive("strike"),
           code: e.isActive("code"),
+          task: e.isActive("taskList"),
           link: e.isActive("link"),
           href: linkAttrs.href ?? "",
         };
@@ -151,6 +155,13 @@ export function BlockBubbleMenu({ editor }: Props) {
           title="Inline code (⌘E)"
         >
           <Code size={14} />
+        </ToolbarBtn>
+        <ToolbarBtn
+          active={menuState.task}
+          onClick={() => (editor.chain().focus() as any).toggleTaskList().run()}
+          title="To-do checklist"
+        >
+          <ListChecks size={14} />
         </ToolbarBtn>
         <Sep />
         <LinkButton
