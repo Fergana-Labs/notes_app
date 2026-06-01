@@ -3,6 +3,7 @@ import { Sidebar } from "./sidebar/Sidebar";
 import { CanvasFeed } from "./editor/CanvasFeed";
 import { ChatBox } from "./editor/ChatBox";
 import { FindBar } from "./editor/FindBar";
+import { TrashPane } from "./editor/TrashPane";
 import { restoreLastFocus } from "./editor/activeEditor";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
@@ -31,6 +32,8 @@ export default function App() {
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange>({ from: null, to: null });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Trash opens in the main panel (like selecting a tag), not a modal.
+  const [showTrash, setShowTrash] = useState(false);
   // Track fullscreen single-block view at App level so the ChatBox can
   // adapt its placeholder. The state itself lives in CanvasFeed; this
   // mirror is read-only.
@@ -204,10 +207,16 @@ export default function App() {
         onSelectTag={(tag) => {
           setTagFilter(tag);
           setSearchActiveId(null);
+          setShowTrash(false);
         }}
         onClearFilter={() => setTagFilter(null)}
-        onJumpToSearchResult={jumpToBlock}
+        onJumpToSearchResult={(id) => {
+          setShowTrash(false);
+          jumpToBlock(id);
+        }}
         onOpenSettings={() => setSettingsOpen(true)}
+        trashActive={showTrash}
+        onOpenTrash={() => setShowTrash(true)}
       />
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <FindBar />
@@ -231,28 +240,34 @@ export default function App() {
           />
         </header>
         <div className="flex-1 flex flex-col overflow-hidden">
-          <CanvasFeed
-            key={path}
-            searchQuery={highlightQuery}
-            caseSensitive={caseSensitive}
-            activeSearchId={searchActiveId}
-            tagFilter={tagFilter}
-            onClearTagFilter={() => setTagFilter(null)}
-            onSelectTag={(tag) => {
-              setTagFilter(tag);
-              setSearchActiveId(null);
-              setFocusedBlockId(null);
-            }}
-            focusedBlockId={focusedBlockId}
-            onClearFocusedBlock={() => {
-              setFocusedBlockId(null);
-              setSearchActiveId(null);
-            }}
-            dateRange={dateRange}
-            onClearDateRange={() => setDateRange({ from: null, to: null })}
-            onFullscreenChange={setFeedFullscreen}
-          />
-          <ChatBox tagFilter={tagFilter} fullscreen={feedFullscreen} />
+          {showTrash ? (
+            <TrashPane onClose={() => setShowTrash(false)} />
+          ) : (
+            <>
+              <CanvasFeed
+                key={path}
+                searchQuery={highlightQuery}
+                caseSensitive={caseSensitive}
+                activeSearchId={searchActiveId}
+                tagFilter={tagFilter}
+                onClearTagFilter={() => setTagFilter(null)}
+                onSelectTag={(tag) => {
+                  setTagFilter(tag);
+                  setSearchActiveId(null);
+                  setFocusedBlockId(null);
+                }}
+                focusedBlockId={focusedBlockId}
+                onClearFocusedBlock={() => {
+                  setFocusedBlockId(null);
+                  setSearchActiveId(null);
+                }}
+                dateRange={dateRange}
+                onClearDateRange={() => setDateRange({ from: null, to: null })}
+                onFullscreenChange={setFeedFullscreen}
+              />
+              <ChatBox tagFilter={tagFilter} fullscreen={feedFullscreen} />
+            </>
+          )}
         </div>
       </main>
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

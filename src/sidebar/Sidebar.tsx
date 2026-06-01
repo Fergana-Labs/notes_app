@@ -1,8 +1,7 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { TagsPane } from "./TagsPane";
 import { SearchResultsPane } from "./SearchResultsPane";
-import { TrashModal } from "./TrashModal";
 import { useDragRegion } from "../hooks/useDragRegion";
 import { useUISettings } from "../stores/uiSettings";
 
@@ -15,6 +14,8 @@ interface Props {
   onClearFilter: () => void;
   onJumpToSearchResult: (id: string) => void;
   onOpenSettings: () => void;
+  trashActive: boolean;
+  onOpenTrash: () => void;
 }
 
 /**
@@ -33,11 +34,12 @@ export function Sidebar({
   onClearFilter,
   onJumpToSearchResult,
   onOpenSettings,
+  trashActive,
+  onOpenTrash,
 }: Props) {
   const navRef = useRef<HTMLElement>(null);
   useDragRegion(navRef);
   const colorful = useUISettings((s) => s.colorful);
-  const [trashOpen, setTrashOpen] = useState(false);
 
   const searchActive = searchQuery.trim().length > 0;
 
@@ -90,8 +92,12 @@ export function Sidebar({
       </div>
 
       <button
-        onClick={() => setTrashOpen(true)}
-        className="flex items-center gap-2 px-3 py-2 text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 border-t border-neutral-200 dark:border-neutral-800"
+        onClick={onOpenTrash}
+        className={`flex items-center gap-2 px-3 py-2 text-xs border-t border-neutral-200 dark:border-neutral-800 ${
+          trashActive
+            ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-medium"
+            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+        }`}
       >
         <Trash2 size={14} />
         <span>Trash</span>
@@ -103,7 +109,6 @@ export function Sidebar({
         <SettingsIcon size={14} />
         <span>Settings</span>
       </button>
-      {trashOpen && <TrashModal onClose={() => setTrashOpen(false)} />}
     </aside>
   );
 }
