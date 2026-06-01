@@ -12,6 +12,7 @@ import {
   AlignVerticalSpaceAround,
   ArrowLeft,
   CheckSquare,
+  ChevronDown,
   Combine,
   Download,
   GripVertical,
@@ -418,9 +419,13 @@ export function CanvasFeed({
   // the old TagsView pattern.
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searching, setSearching] = useState(false);
-  // Quick filter: show only notes that carry no tags. Session-local
-  // (like the old titles-only toggle); lives in the feed toolbar.
-  const [untaggedOnly, setUntaggedOnly] = useState(false);
+  // Quick filter for the toolbar dropdown. Session-local.
+  //   all      — every note
+  //   titled   — only notes with a non-empty title
+  //   untagged — only notes that carry no tags
+  const [filterMode, setFilterMode] = useState<"all" | "titled" | "untagged">(
+    "all",
+  );
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
@@ -463,7 +468,9 @@ export function CanvasFeed({
     if (searchHitIds) {
       arr = arr.filter((b) => searchHitIds.has(b.id));
     }
-    if (untaggedOnly) {
+    if (filterMode === "titled") {
+      arr = arr.filter((b) => (b.title ?? "").trim().length > 0);
+    } else if (filterMode === "untagged") {
       arr = arr.filter((b) => b.tags.length === 0);
     }
     if (dateRange.from != null || dateRange.to != null) {
@@ -495,7 +502,7 @@ export function CanvasFeed({
     focusedBlockId,
     dateRange.from,
     dateRange.to,
-    untaggedOnly,
+    filterMode,
   ]);
 
   // Drop selections whose blocks are no longer visible (filter changed,
@@ -1294,63 +1301,37 @@ export function CanvasFeed({
               ? "searching…"
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
-          <button
-            onClick={() => setUntaggedOnly((v) => !v)}
-            title={
-              untaggedOnly
-                ? "Showing only notes with no tags"
-                : "Show only notes without a tag"
-            }
-            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
-              untaggedOnly
-                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            }`}
-          >
-            Untagged
-          </button>
-          <div className="mochi-view-toggle inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
-            {(
-              [
-                ["card", "Card"],
-                ["note", "Note"],
-                ["list", "List"],
-              ] as const
-            ).map(([mode, label]) => (
-              <button
-                key={mode}
-                onClick={() => void setViewMode(mode)}
-                title={
-                  mode === "card"
-                    ? "Full cards with header bar"
-                    : mode === "note"
-                      ? "Body text only, no header"
-                      : "One row per note: title + first line"
-                }
-                className={`px-2 py-1 ${
-                  viewMode === mode
-                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                    : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="mochi-sort-toggle inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
-            {(["canvas", "newest", "oldest"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => setSort(m)}
-                className={`px-2 py-1 ${
-                  sort === m
-                    ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                    : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                }`}
-              >
-                {m[0].toUpperCase() + m.slice(1)}
-              </button>
-            ))}
+          <div className="ml-auto flex items-center gap-1.5">
+            <ToolbarSelect
+              title="Filter notes"
+              value={filterMode}
+              onChange={setFilterMode}
+              options={[
+                { value: "all", label: "All notes" },
+                { value: "titled", label: "Has title" },
+                { value: "untagged", label: "Untagged" },
+              ]}
+            />
+            <ToolbarSelect
+              title="View mode"
+              value={viewMode}
+              onChange={(v) => void setViewMode(v)}
+              options={[
+                { value: "card", label: "Card" },
+                { value: "note", label: "Note" },
+                { value: "list", label: "List" },
+              ]}
+            />
+            <ToolbarSelect
+              title="Sort order"
+              value={sort}
+              onChange={setSort}
+              options={[
+                { value: "canvas", label: "Canvas" },
+                { value: "newest", label: "Newest" },
+                { value: "oldest", label: "Oldest" },
+              ]}
+            />
           </div>
         </div>
 
@@ -3145,6 +3126,69 @@ function BulkTagButton({
           ))}
         </div>,
         document.body,
+      )}
+    </div>
+  );
+}
+
+/**
+ * Compact labelled dropdown for the feed toolbar — used for the filter,
+ * view-mode, and sort selectors. Self-contained: manages its own open
+ * state and closes on outside click. The toolbar lives outside the
+ * virtualized scroll area, so a plain absolute menu (no portal) is safe.
+ */
+function ToolbarSelect<T extends string>({
+  value,
+  options,
+  onChange,
+  title,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  title: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
+  const current = options.find((o) => o.value === value) ?? options[0];
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={title}
+        className="inline-flex items-center gap-1 text-xs pl-2 pr-1.5 py-1 rounded border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      >
+        {current.label}
+        <ChevronDown size={11} className="text-neutral-400" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-30 min-w-[8rem] rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1 text-xs">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-2.5 py-1.5 ${
+                o.value === value
+                  ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                  : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
