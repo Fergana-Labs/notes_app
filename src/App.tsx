@@ -5,7 +5,6 @@ import { ChatBox } from "./editor/ChatBox";
 import { FindBar } from "./editor/FindBar";
 import { TrashPane } from "./editor/TrashPane";
 import { DailyNotePane } from "./editor/DailyNotePane";
-import { maybeRolloverDaily } from "./lib/daily";
 import { restoreLastFocus } from "./editor/activeEditor";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
@@ -36,7 +35,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Trash / daily-note open in the main panel (like selecting a tag).
   const [showTrash, setShowTrash] = useState(false);
-  const [showDaily, setShowDaily] = useState(false);
+  // Which daily-note date is open in the main panel, or null.
+  const [dailyDate, setDailyDate] = useState<string | null>(null);
   // Track fullscreen single-block view at App level so the ChatBox can
   // adapt its placeholder. The state itself lives in CanvasFeed; this
   // mirror is read-only.
@@ -54,12 +54,6 @@ export default function App() {
     loadUISettings();
   }, [bootstrap, loadUISettings]);
 
-  // Once a workspace is loaded, roll over a previous day's daily note into
-  // blocks (the "end of day" flush, applied on next open).
-  useEffect(() => {
-    if (!path) return;
-    void maybeRolloverDaily();
-  }, [path]);
   // Toggle a root `.colorful` class so the sage-palette overrides in
   // index.css activate. Scope is global (the class lives on <html>)
   // so portaled menus + modals inherit the palette too.
@@ -218,23 +212,23 @@ export default function App() {
           setTagFilter(tag);
           setSearchActiveId(null);
           setShowTrash(false);
-          setShowDaily(false);
+          setDailyDate(null);
         }}
         onClearFilter={() => setTagFilter(null)}
         onJumpToSearchResult={(id) => {
           setShowTrash(false);
-          setShowDaily(false);
+          setDailyDate(null);
           jumpToBlock(id);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
         trashActive={showTrash}
         onOpenTrash={() => {
           setShowTrash(true);
-          setShowDaily(false);
+          setDailyDate(null);
         }}
-        dailyActive={showDaily}
-        onOpenDaily={() => {
-          setShowDaily(true);
+        dailyDate={dailyDate}
+        onSelectDaily={(d) => {
+          setDailyDate(d);
           setShowTrash(false);
         }}
       />
@@ -260,8 +254,11 @@ export default function App() {
           />
         </header>
         <div className="flex-1 flex flex-col overflow-hidden">
-          {showDaily ? (
-            <DailyNotePane onClose={() => setShowDaily(false)} />
+          {dailyDate ? (
+            <DailyNotePane
+              date={dailyDate}
+              onClose={() => setDailyDate(null)}
+            />
           ) : showTrash ? (
             <TrashPane onClose={() => setShowTrash(false)} />
           ) : (

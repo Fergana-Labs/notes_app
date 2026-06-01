@@ -1,18 +1,12 @@
 import { ulid } from "ulid";
-import { ipc } from "./ipc";
 import { useWorkspace } from "../stores/workspace";
 
 /**
- * Daily note: a full-screen scratchpad for the day. The draft lives in
- * the settings table (`daily.draft` + `daily.date`). When a new day
- * begins — or the user explicitly flushes — its content is split into
- * blocks (one per horizontal-rule-delimited segment) and appended to the
- * canvas. Inline `#hashtags` in each segment become tags automatically
- * (the backend extracts + indexes them on save).
+ * Daily notes: one persisted markdown scratchpad per calendar day,
+ * stored in the `daily_notes` table (never auto-destroyed, browsable).
+ * "Add to notes" splits a day's note on horizontal rules into canvas
+ * blocks; inline `#hashtags` in each segment become tags server-side.
  */
-
-const DRAFT_KEY = "daily.draft";
-const DATE_KEY = "daily.date";
 
 /** Local calendar date as YYYY-MM-DD. */
 export function todayStr(now: Date = new Date()): string {
@@ -23,8 +17,8 @@ export function todayStr(now: Date = new Date()): string {
 }
 
 /**
- * Split a daily-note markdown draft into segments on horizontal-rule
- * lines (`---`, `***`, `___`), ignoring rules inside fenced code. Blank
+ * Split a daily-note markdown into segments on horizontal-rule lines
+ * (`---`, `***`, `___`), ignoring rules inside fenced code. Blank
  * segments are dropped.
  */
 export function splitDailyIntoSegments(md: string): string[] {
@@ -47,12 +41,12 @@ export function splitDailyIntoSegments(md: string): string[] {
 }
 
 /**
- * Append a daily-note draft's segments to the canvas as new blocks (at
- * the bottom, in order). Returns how many blocks were created. Inline
- * hashtags are turned into tags server-side.
+ * Append a daily note's segments to the canvas as new blocks (bottom, in
+ * order). Returns how many blocks were created. The daily note itself is
+ * left intact — it's a persistent archive, not a draft.
  */
-export async function flushDailyDraft(draft: string): Promise<number> {
-  const segments = splitDailyIntoSegments(draft);
+export async function flushDailyToBlocks(md: string): Promise<number> {
+  const segments = splitDailyIntoSegments(md);
   if (segments.length === 0) return 0;
   const ws = useWorkspace.getState();
   const all = [...ws.blocks].sort((a, b) => a.position - b.position);
@@ -69,39 +63,45 @@ export async function flushDailyDraft(draft: string): Promise<number> {
   return segments.length;
 }
 
-/** Read the stored draft (current day's working copy). */
-export async function loadDailyDraft(): Promise<string> {
-  const v = await ipc.getSetting(DRAFT_KEY);
-  return v ?? "";
-}
-
-export async function saveDailyDraft(draft: string): Promise<void> {
-  await ipc.setSetting(DRAFT_KEY, draft);
-  await ipc.setSetting(DATE_KEY, todayStr());
-}
-
-export async function clearDailyDraft(): Promise<void> {
-  await ipc.setSetting(DRAFT_KEY, "");
-  await ipc.setSetting(DATE_KEY, todayStr());
-}
-
 /**
- * If the stored draft belongs to an earlier day, flush it to blocks and
- * start a fresh draft for today. Safe to call on app open and whenever
- * the daily note is opened. No-op when the draft is already today's (or
- * empty).
+ * Human label for a daily-note date: "Today" / "Yesterday" / weekday for
+ * the last week, otherwise a Mon D (and year if not current) date.
  */
-export async function maybeRolloverDaily(): Promise<void> {
-  const [savedDate, savedDraft] = await Promise.all([
-    ipc.getSetting(DATE_KEY),
-    ipc.getSetting(DRAFT_KEY),
-  ]);
-  const today = todayStr();
-  if (savedDate && savedDate !== today && savedDraft && savedDraft.trim()) {
-    await flushDailyDraft(savedDraft);
-    await ipc.setSetting(DRAFT_KEY, "");
+export function dailyDateLabel(date: string, now: Date = new Date()): string {
+  if (date === todayStr(now)) return "Today";
+  const y = new Date(now);
+  y.setDate(y.getDate() - 1);
+  if (date === todayStr(y)) return "Yesterday";
+  const d = parseDate(date);
+  if (!d) return date;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+/** Bucket label used to group older daily notes in the sidebar. */
+export function dailyGroupLabel(date: string, now: Date = new Date()): string {
+  const d = parseDate(date);
+  if (!d) return "Earlier";
+  const msDay = 86_400_000;
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.floor((startOfToday.getTime() - d.getTime()) / msDay);
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return "This week";
+  if (diffDays < 14) return "Last week";
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString(undefined, { month: "long" });
   }
-  if (savedDate !== today) {
-    await ipc.setSetting(DATE_KEY, today);
-  }
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function parseDate(date: string): Date | null {
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }

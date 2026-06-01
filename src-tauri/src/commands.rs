@@ -1,6 +1,7 @@
 use crate::config;
 use crate::db::{
-    self, BackupInfo, BlockInput, BlockVersion, SavedBlock, SearchHit, StoredBlock, TagCount,
+    self, BackupInfo, BlockInput, BlockVersion, DailyNoteMeta, SavedBlock, SearchHit, StoredBlock,
+    TagCount,
 };
 use crate::error::{AppError, Result};
 use crate::state::AppState;
@@ -279,6 +280,29 @@ pub fn purge_block(id: String, state: State<'_, AppState>) -> Result<Vec<StoredB
 #[tauri::command]
 pub fn empty_trash(state: State<'_, AppState>) -> Result<usize> {
     state.with(|ws| db::empty_trash(&ws.db))
+}
+
+// =========================================================================
+// Daily notes
+// =========================================================================
+
+#[tauri::command]
+pub fn list_daily_notes(state: State<'_, AppState>) -> Result<Vec<DailyNoteMeta>> {
+    state.with(|ws| db::list_daily_notes(&ws.db))
+}
+
+#[tauri::command]
+pub fn get_daily_note(date: String, state: State<'_, AppState>) -> Result<String> {
+    state.with(|ws| db::get_daily_note(&ws.db, &date))
+}
+
+#[tauri::command]
+pub fn save_daily_note(
+    date: String,
+    content: String,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.with(|ws| db::save_daily_note(&ws.db, &date, &content))
 }
 
 /// Write a UTF-8 text file at `path`. Used for ad-hoc exports (e.g. dumping

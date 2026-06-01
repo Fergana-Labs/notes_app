@@ -8,16 +8,10 @@ import Placeholder from "@tiptap/extension-placeholder";
 import { Markdown } from "tiptap-markdown";
 import type { Editor } from "@tiptap/core";
 import { CornerDownRight } from "lucide-react";
+import { ipc } from "../lib/ipc";
 import { getMarkdownPreservingEmptyParas } from "../lib/markdown";
 import { debounce } from "../lib/debounce";
-import {
-  todayStr,
-  loadDailyDraft,
-  saveDailyDraft,
-  clearDailyDraft,
-  flushDailyDraft,
-  maybeRolloverDaily,
-} from "../lib/daily";
+import { todayStr, dailyDateLabel, flushDailyToBlocks } from "../lib/daily";
 import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
@@ -32,60 +26,58 @@ import {
 } from "./activeEditor";
 
 /**
- * Daily note — a full-screen markdown scratchpad for today, rendered in
- * the main panel. Autosaves to the settings-backed draft; "Add to notes"
- * (and the automatic day-rollover) splits it on horizontal rules into
- * blocks on the canvas, turning inline `#hashtags` into tags. The `#`
- * autocomplete dropdown matches the regular note editor.
+ * Daily note for a specific date, rendered full-screen in the main panel.
+ * Loads that day's saved markdown, autosaves edits back to it, and offers
+ * "Add to notes" (split on horizontal rules → canvas blocks; #hashtags →
+ * tags). Past days are read/editable too — nothing is destroyed. Carries
+ * the same `#` autocomplete as the note editor.
  */
-export function DailyNotePane({ onClose }: { onClose: () => void }) {
+export function DailyNotePane({
+  date,
+  onClose,
+}: {
+  date: string;
+  onClose: () => void;
+}) {
   const [initial, setInitial] = useState<string | null>(null);
-  const [flushMsg, setFlushMsg] = useState<string | null>(null);
 
-  // On open: roll over any previous day's draft into blocks, then load
-  // today's working copy.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      await maybeRolloverDaily();
-      const draft = await loadDailyDraft();
-      if (!cancelled) setInitial(draft);
-    })();
+    setInitial(null);
+    ipc
+      .getDailyNote(date)
+      .then((c) => {
+        if (!cancelled) setInitial(c);
+      })
+      .catch(() => {
+        if (!cancelled) setInitial("");
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [date]);
 
   if (initial === null) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-neutral-400">
-        Loading today’s note…
+        Loading…
       </div>
     );
   }
 
-  return (
-    <DailyEditor
-      key={todayStr()}
-      initial={initial}
-      onClose={onClose}
-      flushMsg={flushMsg}
-      setFlushMsg={setFlushMsg}
-    />
-  );
+  return <DailyEditor key={date} date={date} initial={initial} onClose={onClose} />;
 }
 
 function DailyEditor({
+  date,
   initial,
   onClose,
-  flushMsg,
-  setFlushMsg,
 }: {
+  date: string;
   initial: string;
   onClose: () => void;
-  flushMsg: string | null;
-  setFlushMsg: (m: string | null) => void;
 }) {
+  const [flushMsg, setFlushMsg] = useState<string | null>(null);
   const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
   const pickerSyncRef = useRef<(ed: Editor) => void>(() => {});
   const pickerCloseRef = useRef<() => void>(() => {});
@@ -93,65 +85,67 @@ function DailyEditor({
   const saveDebounced = useMemo(
     () =>
       debounce((md: string) => {
-        void saveDailyDraft(md);
+        void ipc.saveDailyNote(date, md).then(() => {
+          window.dispatchEvent(new Event("mochi:daily-saved"));
+        });
       }, 400),
-    [],
+    [date],
   );
 
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4, 5, 6] },
-        link: {
-          openOnClick: false,
-          autolink: true,
-          HTMLAttributes: { class: "mochi-link" },
+      extensions: [
+        StarterKit.configure({
+          heading: { levels: [1, 2, 3, 4, 5, 6] },
+          link: {
+            openOnClick: false,
+            autolink: true,
+            HTMLAttributes: { class: "mochi-link" },
+          },
+        }),
+        UnderlineExtension,
+        TaskList,
+        TaskItem.configure({ nested: true }),
+        Markdown.configure({
+          html: false,
+          linkify: true,
+          breaks: false,
+          transformPastedText: true,
+        }),
+        ClipboardSerialize,
+        Placeholder.configure({
+          placeholder:
+            "Today… (separate entries with --- ; #tags become tags)",
+          showOnlyWhenEditable: true,
+        }),
+        Hashtag.configure({ getTags: () => [] }),
+        FindInNote,
+        SlashMenu,
+      ],
+      content: initial,
+      autofocus: date === todayStr() ? "end" : false,
+      editorProps: {
+        handleKeyDown(_view, event) {
+          return pickerKeyDownRef.current(event);
         },
-      }),
-      UnderlineExtension,
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      Markdown.configure({
-        html: false,
-        linkify: true,
-        breaks: false,
-        transformPastedText: true,
-      }),
-      ClipboardSerialize,
-      Placeholder.configure({
-        placeholder:
-          "Today… (type, separate entries with --- ; #tags become tags)",
-        showOnlyWhenEditable: true,
-      }),
-      Hashtag.configure({ getTags: () => [] }),
-      FindInNote,
-      SlashMenu,
-    ],
-    content: initial,
-    autofocus: "end",
-    editorProps: {
-      handleKeyDown(_view, event) {
-        return pickerKeyDownRef.current(event);
       },
-    },
-    onUpdate: ({ editor }) => {
-      pickerSyncRef.current(editor);
-      saveDebounced(getMarkdownPreservingEmptyParas(editor));
-    },
-    onSelectionUpdate: ({ editor }) => {
-      rememberSelection(editor);
-      pickerSyncRef.current(editor);
-    },
-    onFocus: ({ editor }) => {
-      setActiveEditor(editor);
-      rememberFocus(editor);
-    },
-    onBlur: ({ editor }) => {
-      saveDebounced(getMarkdownPreservingEmptyParas(editor));
-      saveDebounced.flush();
-      clearActiveEditorIf(editor);
-      pickerCloseRef.current();
-    },
+      onUpdate: ({ editor }) => {
+        pickerSyncRef.current(editor);
+        saveDebounced(getMarkdownPreservingEmptyParas(editor));
+      },
+      onSelectionUpdate: ({ editor }) => {
+        rememberSelection(editor);
+        pickerSyncRef.current(editor);
+      },
+      onFocus: ({ editor }) => {
+        setActiveEditor(editor);
+        rememberFocus(editor);
+      },
+      onBlur: ({ editor }) => {
+        saveDebounced(getMarkdownPreservingEmptyParas(editor));
+        saveDebounced.flush();
+        clearActiveEditorIf(editor);
+        pickerCloseRef.current();
+      },
   });
 
   const picker = useHashtagPicker(editor);
@@ -166,14 +160,10 @@ function DailyEditor({
   const flushNow = async () => {
     if (!editor) return;
     const md = getMarkdownPreservingEmptyParas(editor);
-    saveDebounced.cancel();
-    const n = await flushDailyDraft(md);
-    await clearDailyDraft();
-    editor.commands.clearContent();
-    editor.commands.focus();
+    const n = await flushDailyToBlocks(md);
     setFlushMsg(
       n === 0
-        ? "Nothing to add."
+        ? "Nothing to add (separate entries with ---)."
         : `Added ${n} block${n === 1 ? "" : "s"} to your notes.`,
     );
     window.setTimeout(() => setFlushMsg(null), 3000);
@@ -183,9 +173,9 @@ function DailyEditor({
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center gap-3 px-6 py-3 text-sm">
         <span className="font-medium text-neutral-700 dark:text-neutral-200">
-          Daily note
+          {dailyDateLabel(date)}
         </span>
-        <span className="text-neutral-400">{todayStr()}</span>
+        <span className="text-neutral-400">{date}</span>
         {flushMsg && (
           <span className="text-xs text-green-600 dark:text-green-400">
             {flushMsg}

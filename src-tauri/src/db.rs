@@ -87,6 +87,15 @@ CREATE TABLE IF NOT EXISTS block_pins (
   FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_block_pins_scope ON block_pins(scope);
+
+-- One markdown scratchpad per calendar day. Persisted (never auto-
+-- destroyed) so the user can browse previous days. `date` is YYYY-MM-DD.
+CREATE TABLE IF NOT EXISTS daily_notes (
+  date TEXT PRIMARY KEY,
+  content TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 "#;
 
 pub fn open(workspace: &Path) -> Result<Connection> {
@@ -1229,6 +1238,76 @@ pub fn list_versions(conn: &Connection, block_id: &str) -> Result<Vec<BlockVersi
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+// ── Daily notes ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct DailyNoteMeta {
+    pub date: String,
+    pub updated_at: i64,
+    /// First non-blank line (marker-stripped, truncated) for the list.
+    pub preview: String,
+}
+
+fn daily_preview(content: &str) -> String {
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let stripped = line
+            .trim_start_matches('#')
+            .trim_start_matches(|c| c == '-' || c == '*' || c == '+' || c == '>')
+            .trim();
+        let s = if stripped.is_empty() { line } else { stripped };
+        return s.chars().take(80).collect();
+    }
+    String::new()
+}
+
+pub fn list_daily_notes(conn: &Connection) -> Result<Vec<DailyNoteMeta>> {
+    let mut stmt = conn.prepare(
+        "SELECT date, content, updated_at FROM daily_notes
+         WHERE TRIM(content) <> '' ORDER BY date DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let date: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let updated_at: i64 = row.get(2)?;
+            Ok(DailyNoteMeta {
+                date,
+                updated_at,
+                preview: daily_preview(&content),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn get_daily_note(conn: &Connection, date: &str) -> Result<String> {
+    let content: Option<String> = conn
+        .query_row(
+            "SELECT content FROM daily_notes WHERE date = ?1",
+            params![date],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(content.unwrap_or_default())
+}
+
+pub fn save_daily_note(conn: &Connection, date: &str, content: &str) -> Result<()> {
+    let now = Utc::now().timestamp_millis();
+    conn.execute(
+        "INSERT INTO daily_notes(date, content, created_at, updated_at)
+         VALUES(?1, ?2, ?3, ?3)
+         ON CONFLICT(date) DO UPDATE SET
+           content = excluded.content,
+           updated_at = excluded.updated_at",
+        params![date, content, now],
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]

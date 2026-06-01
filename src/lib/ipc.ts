@@ -53,6 +53,12 @@ export interface DeleteTagResult {
   affected_block_ids: string[];
 }
 
+export interface DailyNoteMeta {
+  date: string;
+  updated_at: number;
+  preview: string;
+}
+
 export interface SearchHit {
   id: string;
   heading: string | null;
@@ -161,6 +167,10 @@ export const ipc = {
     }),
   listVersions: (id: string) =>
     invoke<BlockVersion[]>("list_versions", { id }),
+  listDailyNotes: () => invoke<DailyNoteMeta[]>("list_daily_notes"),
+  getDailyNote: (date: string) => invoke<string>("get_daily_note", { date }),
+  saveDailyNote: (date: string, content: string) =>
+    invoke<void>("save_daily_note", { date, content }),
   listTrash: () => invoke<StoredBlock[]>("list_trash"),
   restoreBlock: (id: string) =>
     invoke<StoredBlock[]>("restore_block", { id }),

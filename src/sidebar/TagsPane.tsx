@@ -18,7 +18,6 @@ import {
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight, FolderPlus, Plus } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
-import { useUISettings } from "../stores/uiSettings";
 import { ipc, type TagCount } from "../lib/ipc";
 import { TagContextMenu } from "./TagContextMenu";
 import { TagDescriptionModal } from "./TagDescriptionModal";
@@ -28,6 +27,9 @@ interface Props {
   selected: string | null;
   onOpenTag: (tag: string) => void;
   onClearTag: () => void;
+  /** `priority` shows the flat shortlist of flagged tags; `all` shows the
+   *  full folder/drag tree. Chosen by the sidebar's icon row. */
+  scope: "priority" | "all";
 }
 
 // Sidebar items are encoded as plain strings. A folder is prefixed with
@@ -60,12 +62,10 @@ function decode(id: string): SidebarEntry {
  * tag for description / delete actions; right-click a folder for
  * rename / delete.
  */
-export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
+export function TagsPane({ selected, onOpenTag, onClearTag, scope }: Props) {
   const tags = useWorkspace((s) => s.tags);
   const refreshTags = useWorkspace((s) => s.refreshTags);
   const reload = useWorkspace((s) => s.reload);
-  const tagScope = useUISettings((s) => s.tagScope);
-  const setTagScope = useUISettings((s) => s.setTagScope);
   // Priority view: a flat, navigable shortlist of the tags the user
   // flagged (no folders / drag-reorder — that lives in the All view).
   const priorityTags = useMemo(
@@ -480,27 +480,6 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
 
   return (
     <div className="p-2 space-y-0.5">
-      {/* Scope toggle: a curated Priority shortlist vs every tag. */}
-      <div className="mochi-tag-scope flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs mb-2">
-        {(
-          [
-            ["priority", "Priority"],
-            ["all", "All tags"],
-          ] as const
-        ).map(([scope, label]) => (
-          <button
-            key={scope}
-            onClick={() => void setTagScope(scope)}
-            className={`flex-1 px-2 py-1 ${
-              tagScope === scope
-                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
       <div className="flex items-center gap-2 mb-1">
         <button
           onClick={onClearTag}
@@ -577,7 +556,7 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
         </p>
       )}
 
-      {tagScope === "priority" ? (
+      {scope === "priority" ? (
         priorityTags.length === 0 ? (
           <p className="px-2 py-2 text-xs text-neutral-500 italic">
             No priority tags yet. Right-click a tag in “All tags” and choose

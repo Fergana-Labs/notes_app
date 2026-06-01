@@ -23,29 +23,30 @@ interface UISettings {
   /** Active feed view mode. `note` hides the per-card header (the old
    *  `hideHeaders` flag); `list` is the old titles-only row view. */
   viewMode: ViewMode;
-  /** Sidebar tag scope: `priority` shows only flagged tags, `all` shows
-   *  everything. */
-  tagScope: "priority" | "all";
+  /** Which sidebar list is showing: the daily-notes archive, the
+   *  priority-tags shortlist, or all tags. */
+  sidebarView: "daily" | "priority" | "all";
   loaded: boolean;
   load: () => Promise<void>;
   setColorful: (v: boolean) => Promise<void>;
   setCompact: (v: boolean) => Promise<void>;
   setViewMode: (v: ViewMode) => Promise<void>;
-  setTagScope: (v: "priority" | "all") => Promise<void>;
+  setSidebarView: (v: "daily" | "priority" | "all") => Promise<void>;
 }
 
 export const useUISettings = create<UISettings>((set) => ({
   colorful: false,
   compact: false,
   viewMode: "card",
-  tagScope: "all",
+  sidebarView: "all",
   loaded: false,
   load: async () => {
-    const [c, cm, vm, hh, ts] = await Promise.all([
+    const [c, cm, vm, hh, sv, ts] = await Promise.all([
       ipc.getSetting("ui.colorful"),
       ipc.getSetting("ui.compact"),
       ipc.getSetting("ui.view_mode"),
       ipc.getSetting("ui.hide_headers"),
+      ipc.getSetting("ui.sidebar_view"),
       ipc.getSetting("ui.tag_scope"),
     ]);
     // Prefer the new view_mode key; fall back to the legacy hide_headers
@@ -53,11 +54,16 @@ export const useUISettings = create<UISettings>((set) => ({
     let viewMode: ViewMode = "card";
     if (vm === "card" || vm === "note" || vm === "list") viewMode = vm;
     else if (hh === "true") viewMode = "note";
+    // Prefer the new sidebar_view key; fall back to the legacy tag_scope
+    // (priority/all) for workspaces saved before daily notes existed.
+    let sidebarView: "daily" | "priority" | "all" = "all";
+    if (sv === "daily" || sv === "priority" || sv === "all") sidebarView = sv;
+    else if (ts === "priority") sidebarView = "priority";
     set({
       colorful: c === "true",
       compact: cm === "true",
       viewMode,
-      tagScope: ts === "priority" ? "priority" : "all",
+      sidebarView,
       loaded: true,
     });
   },
@@ -73,8 +79,8 @@ export const useUISettings = create<UISettings>((set) => ({
     await ipc.setSetting("ui.view_mode", v);
     set({ viewMode: v });
   },
-  setTagScope: async (v) => {
-    await ipc.setSetting("ui.tag_scope", v);
-    set({ tagScope: v });
+  setSidebarView: async (v) => {
+    await ipc.setSetting("ui.sidebar_view", v);
+    set({ sidebarView: v });
   },
 }));

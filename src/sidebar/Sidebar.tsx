@@ -1,6 +1,13 @@
 import { useRef } from "react";
-import { Settings as SettingsIcon, Trash2, CalendarDays } from "lucide-react";
+import {
+  Settings as SettingsIcon,
+  Trash2,
+  CalendarDays,
+  Star,
+  Hash,
+} from "lucide-react";
 import { TagsPane } from "./TagsPane";
+import { DailyNotesList } from "./DailyNotesList";
 import { SearchResultsPane } from "./SearchResultsPane";
 import { useDragRegion } from "../hooks/useDragRegion";
 import { useUISettings } from "../stores/uiSettings";
@@ -16,16 +23,16 @@ interface Props {
   onOpenSettings: () => void;
   trashActive: boolean;
   onOpenTrash: () => void;
-  dailyActive: boolean;
-  onOpenDaily: () => void;
+  /** Currently-open daily note date (for highlighting), or null. */
+  dailyDate: string | null;
+  onSelectDaily: (date: string) => void;
 }
 
 /**
- * Sidebar — single pane, just tags. The Canvas/Sections tab was removed
- * along with the heading-tree navigation; the canvas itself is now a
- * unified card feed that filters by the tag selected here. Search
- * (top-bar) swaps the tags list out for an in-document match list while
- * the query is active.
+ * Sidebar. A top icon row switches the list between three sources: the
+ * daily-notes archive, the priority-tags shortlist, and all tags. An
+ * active search overrides the list with in-document match results. Trash
+ * and Settings live in the footer.
  */
 export function Sidebar({
   tagFilter,
@@ -38,20 +45,17 @@ export function Sidebar({
   onOpenSettings,
   trashActive,
   onOpenTrash,
-  dailyActive,
-  onOpenDaily,
+  dailyDate,
+  onSelectDaily,
 }: Props) {
   const navRef = useRef<HTMLElement>(null);
   useDragRegion(navRef);
   const colorful = useUISettings((s) => s.colorful);
+  const sidebarView = useUISettings((s) => s.sidebarView);
+  const setSidebarView = useUISettings((s) => s.setSidebarView);
 
   const searchActive = searchQuery.trim().length > 0;
 
-  // Colorful mode: the actual deep sage from stash_desktop's sidebar
-  // (`--sidebar: #557153` + `--sidebar-border: #4a6741`). Same colors
-  // light and dark — the sidebar reads as a colored chrome rather
-  // than a tinted surface. Inner content overrides for white-on-green
-  // text live in index.css (scoped to `.colorful aside`).
   const surfaceClass = colorful
     ? "bg-[#557153] text-white"
     : "bg-white/40 dark:bg-neutral-950/40";
@@ -59,53 +63,74 @@ export function Sidebar({
     ? "border-[#4a6741]"
     : "border-neutral-200 dark:border-neutral-800";
 
+  const tabs = [
+    { id: "daily", label: "Daily", icon: CalendarDays },
+    { id: "priority", label: "Priority", icon: Star },
+    { id: "all", label: "All tags", icon: Hash },
+  ] as const;
+
   return (
     <aside
       className={`w-72 border-r flex flex-col backdrop-blur shrink-0 ${surfaceClass} ${borderClass}`}
     >
-      {/* Header bar aligned with the top-bar height. `pl-[80px]` clears the
-          macOS traffic-light buttons (overlaid because of titleBarStyle:
-          Overlay). The whole strip is a tauri drag region so the window
-          can be moved by empty parts of it. */}
       <nav
         ref={navRef}
         data-tauri-drag-region
         className="h-11 pl-[80px] pr-3 border-b border-neutral-200 dark:border-neutral-800 select-none"
       />
-      {searchActive && (
-        <div className="px-3 py-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400 border-b border-neutral-100 dark:border-neutral-800">
-          Search
-        </div>
+
+      {searchActive ? (
+        <>
+          <div className="px-3 py-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400 border-b border-neutral-100 dark:border-neutral-800">
+            Search
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <SearchResultsPane
+              query={searchQuery}
+              caseSensitive={caseSensitive}
+              activeId={searchActiveId}
+              onJump={(id) => onJumpToSearchResult(id)}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Source switcher: daily notes / priority tags / all tags. */}
+          <div className="flex items-center gap-1 px-2 pt-2 pb-1">
+            {tabs.map((t) => {
+              const active = sidebarView === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => void setSidebarView(t.id)}
+                  title={t.label}
+                  className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs ${
+                    active
+                      ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
+                      : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  }`}
+                >
+                  <t.icon size={14} />
+                  <span className="hidden xl:inline">{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {sidebarView === "daily" ? (
+              <DailyNotesList selectedDate={dailyDate} onSelect={onSelectDaily} />
+            ) : (
+              <TagsPane
+                selected={tagFilter}
+                onOpenTag={onSelectTag}
+                onClearTag={onClearFilter}
+                scope={sidebarView === "priority" ? "priority" : "all"}
+              />
+            )}
+          </div>
+        </>
       )}
 
-      <div className="flex-1 overflow-y-auto">
-        {searchActive ? (
-          <SearchResultsPane
-            query={searchQuery}
-            caseSensitive={caseSensitive}
-            activeId={searchActiveId}
-            onJump={(id) => onJumpToSearchResult(id)}
-          />
-        ) : (
-          <TagsPane
-            selected={tagFilter}
-            onOpenTag={onSelectTag}
-            onClearTag={onClearFilter}
-          />
-        )}
-      </div>
-
-      <button
-        onClick={onOpenDaily}
-        className={`flex items-center gap-2 px-3 py-2 text-xs border-t border-neutral-200 dark:border-neutral-800 ${
-          dailyActive
-            ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-medium"
-            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
-        }`}
-      >
-        <CalendarDays size={14} />
-        <span>Daily note</span>
-      </button>
       <button
         onClick={onOpenTrash}
         className={`flex items-center gap-2 px-3 py-2 text-xs border-t border-neutral-200 dark:border-neutral-800 ${
