@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Star } from "lucide-react";
 import type { TagCount } from "../lib/ipc";
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
   y: number;
   onClose: () => void;
   onEditDescription: () => void;
+  onTogglePriority: () => void;
   onDelete: () => void;
 }
 
@@ -21,6 +22,7 @@ export function TagContextMenu({
   y,
   onClose,
   onEditDescription,
+  onTogglePriority,
   onDelete,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -69,6 +71,17 @@ export function TagContextMenu({
       <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-neutral-400">
         #{tag.tag}
       </div>
+      <Item
+        icon={
+          <Star
+            size={13}
+            fill={tag.priority ? "currentColor" : "none"}
+          />
+        }
+        onClick={onTogglePriority}
+      >
+        {tag.priority ? "Remove from priority" : "Mark as priority"}
+      </Item>
       <Item icon={<Pencil size={13} />} onClick={onEditDescription}>
         Edit description…
       </Item>

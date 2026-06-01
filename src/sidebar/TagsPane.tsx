@@ -18,6 +18,7 @@ import {
 import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { ChevronDown, ChevronRight, FolderPlus, Plus } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
+import { useUISettings } from "../stores/uiSettings";
 import { ipc, type TagCount } from "../lib/ipc";
 import { TagContextMenu } from "./TagContextMenu";
 import { TagDescriptionModal } from "./TagDescriptionModal";
@@ -63,6 +64,23 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
   const tags = useWorkspace((s) => s.tags);
   const refreshTags = useWorkspace((s) => s.refreshTags);
   const reload = useWorkspace((s) => s.reload);
+  const tagScope = useUISettings((s) => s.tagScope);
+  const setTagScope = useUISettings((s) => s.setTagScope);
+  // Priority view: a flat, navigable shortlist of the tags the user
+  // flagged (no folders / drag-reorder — that lives in the All view).
+  const priorityTags = useMemo(
+    () =>
+      tags
+        .filter((t) => t.priority)
+        .sort((a, b) => {
+          const ao = a.sort_order ?? Infinity;
+          const bo = b.sort_order ?? Infinity;
+          if (ao !== bo) return ao - bo;
+          if (b.count !== a.count) return b.count - a.count;
+          return a.tag.localeCompare(b.tag);
+        }),
+    [tags],
+  );
 
   const [contextMenu, setContextMenu] = useState<{
     tag: TagCount;
@@ -462,6 +480,27 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
 
   return (
     <div className="p-2 space-y-0.5">
+      {/* Scope toggle: a curated Priority shortlist vs every tag. */}
+      <div className="mochi-tag-scope flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs mb-2">
+        {(
+          [
+            ["priority", "Priority"],
+            ["all", "All tags"],
+          ] as const
+        ).map(([scope, label]) => (
+          <button
+            key={scope}
+            onClick={() => void setTagScope(scope)}
+            className={`flex-1 px-2 py-1 ${
+              tagScope === scope
+                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="flex items-center gap-2 mb-1">
         <button
           onClick={onClearTag}
@@ -538,6 +577,27 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
         </p>
       )}
 
+      {tagScope === "priority" ? (
+        priorityTags.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-neutral-500 italic">
+            No priority tags yet. Right-click a tag in “All tags” and choose
+            “Mark as priority”.
+          </p>
+        ) : (
+          priorityTags.map((t) => (
+            <PriorityTagRow
+              key={`prio:${t.tag}`}
+              tag={t}
+              active={selected === t.tag}
+              onOpen={() => onOpenTag(t.tag)}
+              onContextMenu={(ev) => {
+                ev.preventDefault();
+                setContextMenu({ tag: t, x: ev.clientX, y: ev.clientY });
+              }}
+            />
+          ))
+        )
+      ) : (
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -627,6 +687,7 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
           </SortableContext>
         </RootDropZone>
       </DndContext>
+      )}
 
       {contextMenu &&
         createPortal(
@@ -638,6 +699,13 @@ export function TagsPane({ selected, onOpenTag, onClearTag }: Props) {
             onEditDescription={() => {
               setDescriptionTag(contextMenu.tag);
               setContextMenu(null);
+            }}
+            onTogglePriority={() => {
+              const t = contextMenu.tag;
+              setContextMenu(null);
+              void ipc
+                .setTagPriority(t.tag, !t.priority)
+                .then(() => refreshTags());
             }}
             onDelete={() => {
               setDeleteTag(contextMenu.tag);
@@ -830,6 +898,38 @@ function TagRow({
         <span className="text-neutral-400 shrink-0 ml-2">{tag.count}</span>
       </button>
     </div>
+  );
+}
+
+/**
+ * Simple (non-draggable) tag row for the Priority view. Reorder / folder
+ * organization lives in the All-tags view, so this one skips dnd-kit.
+ */
+function PriorityTagRow({
+  tag,
+  active,
+  onOpen,
+  onContextMenu,
+}: {
+  tag: TagCount;
+  active: boolean;
+  onOpen: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <button
+      onClick={onOpen}
+      onContextMenu={onContextMenu}
+      title={tag.description || "Right-click to remove from priority"}
+      className={`w-full flex justify-between text-sm px-2 py-1 rounded ${
+        active
+          ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+          : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
+      }`}
+    >
+      <span className="truncate text-left">#{tag.tag}</span>
+      <span className="text-neutral-400 shrink-0 ml-2">{tag.count}</span>
+    </button>
   );
 }
 

@@ -24,6 +24,7 @@ pub fn run() {
             commands::list_tags,
             commands::set_tag_description,
             commands::reorder_tags,
+            commands::set_tag_priority,
             commands::set_tag_folder,
             commands::delete_tag,
             commands::search,

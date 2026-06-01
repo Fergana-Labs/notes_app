@@ -154,6 +154,15 @@ pub fn reorder_tags(names: Vec<String>, state: State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
+pub fn set_tag_priority(
+    name: String,
+    priority: bool,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.with(|ws| db::set_tag_priority(&ws.db, &name, priority))
+}
+
+#[tauri::command]
 pub fn set_tag_folder(
     name: String,
     folder: Option<String>,

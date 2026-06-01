@@ -23,24 +23,30 @@ interface UISettings {
   /** Active feed view mode. `note` hides the per-card header (the old
    *  `hideHeaders` flag); `list` is the old titles-only row view. */
   viewMode: ViewMode;
+  /** Sidebar tag scope: `priority` shows only flagged tags, `all` shows
+   *  everything. */
+  tagScope: "priority" | "all";
   loaded: boolean;
   load: () => Promise<void>;
   setColorful: (v: boolean) => Promise<void>;
   setCompact: (v: boolean) => Promise<void>;
   setViewMode: (v: ViewMode) => Promise<void>;
+  setTagScope: (v: "priority" | "all") => Promise<void>;
 }
 
 export const useUISettings = create<UISettings>((set) => ({
   colorful: false,
   compact: false,
   viewMode: "card",
+  tagScope: "all",
   loaded: false,
   load: async () => {
-    const [c, cm, vm, hh] = await Promise.all([
+    const [c, cm, vm, hh, ts] = await Promise.all([
       ipc.getSetting("ui.colorful"),
       ipc.getSetting("ui.compact"),
       ipc.getSetting("ui.view_mode"),
       ipc.getSetting("ui.hide_headers"),
+      ipc.getSetting("ui.tag_scope"),
     ]);
     // Prefer the new view_mode key; fall back to the legacy hide_headers
     // boolean (true → note view) for workspaces saved before the merge.
@@ -51,6 +57,7 @@ export const useUISettings = create<UISettings>((set) => ({
       colorful: c === "true",
       compact: cm === "true",
       viewMode,
+      tagScope: ts === "priority" ? "priority" : "all",
       loaded: true,
     });
   },
@@ -65,5 +72,9 @@ export const useUISettings = create<UISettings>((set) => ({
   setViewMode: async (v) => {
     await ipc.setSetting("ui.view_mode", v);
     set({ viewMode: v });
+  },
+  setTagScope: async (v) => {
+    await ipc.setSetting("ui.tag_scope", v);
+    set({ tagScope: v });
   },
 }));

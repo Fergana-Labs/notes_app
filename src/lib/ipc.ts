@@ -44,6 +44,9 @@ export interface TagCount {
    *  for root. Folders are visual-only — they never appear in the
    *  tag's name or in block content. */
   folder: string | null;
+  /** True when the user flagged this tag as "priority" — the sidebar's
+   *  Priority view shows only these. */
+  priority: boolean;
 }
 
 export interface DeleteTagResult {
@@ -136,6 +139,8 @@ export const ipc = {
   setTagDescription: (name: string, description: string) =>
     invoke<void>("set_tag_description", { name, description }),
   reorderTags: (names: string[]) => invoke<void>("reorder_tags", { names }),
+  setTagPriority: (name: string, priority: boolean) =>
+    invoke<void>("set_tag_priority", { name, priority }),
   setTagFolder: (name: string, folder: string | null) =>
     invoke<void>("set_tag_folder", { name, folder }),
   deleteTag: (name: string, mode: "strip" | "delete_blocks") =>

@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS tags (
   description TEXT NOT NULL DEFAULT '',
   sort_order INTEGER,
   folder TEXT,
+  priority INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -111,6 +112,9 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     // count and recoverable until purged. Idempotent for existing
     // workspaces.
     add_column_if_missing(&conn, "blocks", "deleted_at", "INTEGER")?;
+    // `priority` marks tags the user wants surfaced in the sidebar's
+    // "Priority" view (vs the long tail under "All"). Idempotent.
+    add_column_if_missing(&conn, "tags", "priority", "INTEGER NOT NULL DEFAULT 0")?;
     // One-shot copy of legacy `blocks.pinned = 1` rows into the
     // scoped `block_pins` table (with scope = '' meaning "global /
     // All view"). Gated by a settings flag so it only runs once per
@@ -343,6 +347,9 @@ pub struct TagCount {
     pub description: String,
     pub sort_order: Option<i64>,
     pub folder: Option<String>,
+    /// True when the user has marked this tag as a "priority" tag — the
+    /// sidebar's Priority view shows only these.
+    pub priority: bool,
 }
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
@@ -354,7 +361,8 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
                 COUNT(b.id) AS c,
                 t.description,
                 t.sort_order,
-                t.folder
+                t.folder,
+                t.priority
          FROM tags t
          LEFT JOIN block_tags bt ON bt.tag_id = t.id
          LEFT JOIN blocks b ON b.id = bt.block_id AND b.deleted_at IS NULL
@@ -372,6 +380,7 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
                 description: row.get(2)?,
                 sort_order: row.get(3)?,
                 folder: row.get(4)?,
+                priority: row.get::<_, i64>(5)? != 0,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -408,6 +417,23 @@ pub fn set_tag_folder(conn: &Connection, name: &str, folder: Option<&str>) -> Re
            folder = excluded.folder,
            updated_at = excluded.updated_at",
         params![lname, folder, now],
+    )?;
+    Ok(())
+}
+
+/// Mark / unmark a tag as a "priority" tag (surfaced in the sidebar's
+/// Priority view). Upserts the row so a never-before-seen tag can be
+/// flagged too.
+pub fn set_tag_priority(conn: &Connection, name: &str, priority: bool) -> Result<()> {
+    let now = Utc::now().timestamp_millis();
+    let lname = name.to_lowercase();
+    conn.execute(
+        "INSERT INTO tags(name, description, sort_order, folder, priority, created_at, updated_at)
+         VALUES(?1, '', NULL, NULL, ?2, ?3, ?3)
+         ON CONFLICT(name) DO UPDATE SET
+           priority = excluded.priority,
+           updated_at = excluded.updated_at",
+        params![lname, if priority { 1 } else { 0 }, now],
     )?;
     Ok(())
 }
