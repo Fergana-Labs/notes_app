@@ -44,7 +44,7 @@ import { CSS as DndCSS } from "@dnd-kit/utilities";
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
-import { Fragment, type Node as PMNode } from "@tiptap/pm/model";
+import { type Node as PMNode } from "@tiptap/pm/model";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
@@ -58,7 +58,11 @@ import { useWorkspace } from "../stores/workspace";
 import { useUISettings } from "../stores/uiSettings";
 import { ipc, type BlockInput, type StoredBlock } from "../lib/ipc";
 import { debounce } from "../lib/debounce";
-import { unescapeInlineHashtags } from "../lib/markdown";
+import {
+  unescapeInlineHashtags,
+  getMarkdownPreservingEmptyParas,
+  serializeFragmentPreservingEmptyParas,
+} from "../lib/markdown";
 import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { BlockBubbleMenu } from "./BubbleMenu";
@@ -259,51 +263,6 @@ function useVirtualRows<T extends { id: string }>(
   );
 
   return { totalSize: layout.totalSize, virtualItems, measureElement };
-}
-
-/**
- * Serialize the editor's doc to markdown while preserving empty
- * paragraphs across the round-trip. Plain markdown has no syntax
- * for "an empty paragraph" — consecutive blank lines collapse — so
- * tiptap-markdown's default serializer drops them and the user
- * loses intentional whitespace on save.
- *
- * Build a Fragment containing the same top-level children, with
- * empty paragraphs swapped for paragraphs that hold a single NBSP
- * (U+00A0). NBSP isn't whitespace by CommonMark spec, so the
- * paragraph survives markdown -> PM and the empty line reappears
- * on reload. Serialize the whole Fragment in one call —
- * serializer.serialize(node) on each child individually strips block
- * wrapping syntax (heading "# ", list "- ", code fences) because
- * the serializer's renderContent iterates the children of what you
- * pass rather than treating it as a sibling at the doc level.
- */
-function getMarkdownPreservingEmptyParas(ed: Editor): string {
-  const serializer = (ed.storage as any).markdown?.serializer;
-  if (!serializer) {
-    return (ed.storage as any).markdown?.getMarkdown?.() ?? "";
-  }
-  const doc = ed.state.doc;
-  const schema = doc.type.schema;
-  const paraType = schema.nodes.paragraph;
-  if (!paraType) return serializer.serialize(doc);
-  let needsTransform = false;
-  doc.content.forEach((node) => {
-    if (node.type.name === "paragraph" && node.textContent.length === 0) {
-      needsTransform = true;
-    }
-  });
-  if (!needsTransform) return serializer.serialize(doc);
-  const NBSP = String.fromCharCode(0xa0);
-  const children: PMNode[] = [];
-  doc.content.forEach((node) => {
-    if (node.type.name === "paragraph" && node.textContent.length === 0) {
-      children.push(paraType.create({}, schema.text(NBSP)));
-    } else {
-      children.push(node);
-    }
-  });
-  return serializer.serialize(Fragment.from(children));
 }
 
 function virtualRowStyle(start: number, gap: number): React.CSSProperties {
@@ -718,15 +677,22 @@ export function CanvasFeed({
    * below. Mirrors the keyboard shortcut handled by CrossBlockNav.
    */
   const splitBlockAtCursor = async (block: StoredBlock, editor: Editor) => {
-    const md: string =
-      (editor.storage as any).markdown?.getMarkdown?.() ?? block.content;
-    const cleaned = unescapeInlineHashtags(md);
+    // Use the empty-paragraph-preserving serializer so blank lines inside
+    // either half survive the split (NBSP-encoded). Both the full content
+    // and the before-cursor slice go through the same path so the split
+    // offset stays aligned.
+    const cleaned = unescapeInlineHashtags(
+      getMarkdownPreservingEmptyParas(editor),
+    );
     // The PM selection position doesn't translate 1:1 to markdown offset
     // (PM has node-token positions; markdown is plain text). The
     // pragmatic proxy: serialize the doc fragment up to the cursor, use
     // that text length as the split point in the full markdown string.
     const beforeFragment = editor.state.doc.cut(0, editor.state.selection.from);
-    const beforeMd: string = (editor.storage as any).markdown.serializer.serialize(beforeFragment);
+    const beforeMd: string = serializeFragmentPreservingEmptyParas(
+      editor,
+      beforeFragment.content,
+    );
     const beforeClean = unescapeInlineHashtags(beforeMd).trimEnd();
     const splitIdx = Math.min(beforeClean.length, cleaned.length);
     const left = cleaned.slice(0, splitIdx).trimEnd();

@@ -55,6 +55,16 @@ pub fn extract_hashtags(content: &str) -> Vec<String> {
 /// and squashes runs of blank lines that were created when a tag was
 /// the only content on a line.
 pub fn strip_inline_hashtags(content: &str) -> String {
+    // Fast path: a block with no inline hashtags is stored verbatim, so
+    // the user's raw markdown — leading indentation on nested bullets,
+    // intentional blank lines, leading/trailing whitespace — round-trips
+    // losslessly. The whitespace cleanup below only ever runs when there's
+    // actually a `#tag` to remove (and the surrounding spaces it leaves
+    // behind need tidying).
+    if extract_hashtags(content).is_empty() {
+        return content.to_string();
+    }
+
     static MULTI_SPACE: once_cell::sync::Lazy<Regex> =
         once_cell::sync::Lazy::new(|| Regex::new(r"[ \t]{2,}").unwrap());
     static TRAILING_WS: once_cell::sync::Lazy<Regex> =
@@ -77,7 +87,13 @@ pub fn strip_inline_hashtags(content: &str) -> String {
         let url_ranges: Vec<(usize, usize)> =
             URL.find_iter(line).map(|m| (m.start(), m.end())).collect();
         let stripped = strip_line(line, &url_ranges);
-        let collapsed = MULTI_SPACE.replace_all(&stripped, " ").to_string();
+        // Collapse interior runs of spaces left behind by tag removal, but
+        // preserve the line's LEADING indentation — nested list markers
+        // (`  - child`) depend on it, and collapsing `  ` → ` ` would
+        // silently un-nest the bullet on every save.
+        let indent_len = stripped.len() - stripped.trim_start().len();
+        let (indent, rest) = stripped.split_at(indent_len);
+        let collapsed = format!("{}{}", indent, MULTI_SPACE.replace_all(rest, " "));
         let trimmed = TRAILING_WS.replace_all(&collapsed, "").to_string();
         out_lines.push(trimmed);
     }
@@ -321,6 +337,23 @@ mod tests {
     fn strip_squashes_blank_lines_when_tag_only_line() {
         let out = strip_inline_hashtags("line one\n#sololine\nline two");
         assert_eq!(out, "line one\n\nline two");
+    }
+
+    #[test]
+    fn strip_preserves_nested_list_indent() {
+        // A tag elsewhere in the block must not collapse the 2-space
+        // indent that nests the child bullet.
+        let src = "- Parent #x\n  - Child\n    - Grandchild";
+        let out = strip_inline_hashtags(src);
+        assert_eq!(out, "- Parent\n  - Child\n    - Grandchild");
+    }
+
+    #[test]
+    fn strip_no_tags_is_verbatim() {
+        // No hashtags → returned byte-for-byte, including blank lines,
+        // leading indentation and a leading blank line.
+        let src = "\nline one\n\n\n  indented\n";
+        assert_eq!(strip_inline_hashtags(src), src);
     }
 
     #[test]

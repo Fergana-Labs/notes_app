@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 // @ts-expect-error — no shipped types for markdown-it-task-lists
 import taskLists from "markdown-it-task-lists";
 import type { Editor } from "@tiptap/core";
-import { DOMParser as PMDOMParser } from "@tiptap/pm/model";
+import { DOMParser as PMDOMParser, Fragment, type Node as PMNode } from "@tiptap/pm/model";
 import type { BlockInput, StoredBlock } from "./ipc";
 
 const md = new MarkdownIt({
@@ -65,6 +65,63 @@ export function docToMarkdown(editor: Editor): string {
   if (!serializer) return "";
   const out: string = serializer.serialize(editor.state.doc);
   return out.endsWith("\n") ? out : out + "\n";
+}
+
+const NBSP = String.fromCharCode(0xa0);
+
+/**
+ * Serialize an editor's doc to markdown while preserving empty
+ * paragraphs across the round-trip. Plain markdown has no syntax for
+ * "an empty paragraph" — consecutive blank lines collapse — so
+ * tiptap-markdown's default serializer drops them and the user loses
+ * intentional whitespace on save.
+ *
+ * We build a Fragment with the same top-level children, swapping empty
+ * paragraphs for paragraphs holding a single NBSP (U+00A0). NBSP isn't
+ * whitespace by CommonMark spec, so the paragraph survives markdown → PM
+ * and the empty line reappears on reload. Serializing the whole Fragment
+ * in one call (rather than each child individually) keeps block wrapping
+ * syntax — heading `# `, list `- `, code fences — intact.
+ *
+ * Shared by every save path (per-card editor, fullscreen editor, the
+ * capture bar, and block splits) so empty-line fidelity is identical
+ * everywhere.
+ */
+export function getMarkdownPreservingEmptyParas(ed: Editor): string {
+  return serializeFragmentPreservingEmptyParas(ed, ed.state.doc.content);
+}
+
+/**
+ * Same empty-paragraph-preserving serialize as
+ * `getMarkdownPreservingEmptyParas`, but for an arbitrary Fragment (e.g.
+ * the doc cut up to the cursor when computing a split point). Keeps the
+ * NBSP treatment identical so offsets computed from one match the other.
+ */
+export function serializeFragmentPreservingEmptyParas(
+  ed: Editor,
+  fragment: Fragment,
+): string {
+  const serializer = (ed.storage as any).markdown?.serializer;
+  if (!serializer) return "";
+  const schema = ed.state.doc.type.schema;
+  const paraType = schema.nodes.paragraph;
+  if (!paraType) return serializer.serialize(fragment);
+  let needsTransform = false;
+  fragment.forEach((node) => {
+    if (node.type.name === "paragraph" && node.textContent.length === 0) {
+      needsTransform = true;
+    }
+  });
+  if (!needsTransform) return serializer.serialize(fragment);
+  const children: PMNode[] = [];
+  fragment.forEach((node) => {
+    if (node.type.name === "paragraph" && node.textContent.length === 0) {
+      children.push(paraType.create({}, schema.text(NBSP)));
+    } else {
+      children.push(node);
+    }
+  });
+  return serializer.serialize(Fragment.from(children));
 }
 
 /**
