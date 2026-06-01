@@ -284,6 +284,27 @@ html, body, #root {
   }
 }
 
+/* Cmd-F in-note find decorations (FindInNote). Cyan to distinguish from
+   the amber global-search highlight; the active match is filled. */
+.ProseMirror .mochi-find-match {
+  background: oklch(0.9 0.1 220);
+  border-radius: 2px;
+}
+.ProseMirror .mochi-find-match-active {
+  background: oklch(0.78 0.16 220);
+  color: black;
+  border-radius: 2px;
+}
+@media (prefers-color-scheme: dark) {
+  .ProseMirror .mochi-find-match {
+    background: oklch(0.45 0.1 220);
+  }
+  .ProseMirror .mochi-find-match-active {
+    background: oklch(0.68 0.16 220);
+    color: black;
+  }
+}
+
 /* Inside a feed card OR the full-page expanded editor, the inline
    `#tag` decoration from HashtagHidePerCard is suppressed visually —
    tags live in the chip strip / header so they shouldn't also appear

@@ -66,6 +66,8 @@ import {
 import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
+import { FindInNote } from "./extensions/FindInNote";
+import { setActiveEditor, clearActiveEditorIf } from "./activeEditor";
 import { BlockBubbleMenu } from "./BubbleMenu";
 import { BlockMenu } from "./BlockMenu";
 import { VersionHistoryModal } from "./VersionHistoryModal";
@@ -2230,6 +2232,7 @@ function EditableBody({
         getTags: () => tagsRef.current.map((t) => t.tag),
       }),
       SearchHighlightPerCard,
+      FindInNote,
       SlashMenu,
       CrossBlockNav.configure({
         onAppendBelow: () => onAppendBelowRef.current(),
@@ -2339,6 +2342,10 @@ function EditableBody({
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
+    onFocus: ({ editor }) => {
+      // Register as the active editor so Cmd-F (find in note) binds here.
+      setActiveEditor(editor);
+    },
     onBlur: ({ editor }) => {
       // Blur is the user committing — flush any pending save, AND
       // force a save with the current content (in case we were
@@ -2347,6 +2354,7 @@ function EditableBody({
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
       saveDebounced.flush();
+      clearActiveEditorIf(editor);
     },
   });
 
@@ -3370,6 +3378,7 @@ function ExpandedBlockEditor({
       Hashtag.configure({
         getTags: () => tagsRef.current.map((t) => t.tag),
       }),
+      FindInNote,
       SlashMenu,
     ],
     content: block?.content ?? "",
@@ -3389,11 +3398,15 @@ function ExpandedBlockEditor({
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
+    onFocus: ({ editor }) => {
+      setActiveEditor(editor);
+    },
     onBlur: ({ editor }) => {
       saveDebounced.flush();
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
       saveDebounced.flush();
+      clearActiveEditorIf(editor);
     },
   });
 

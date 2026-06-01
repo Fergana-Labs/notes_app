@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./sidebar/Sidebar";
 import { CanvasFeed } from "./editor/CanvasFeed";
 import { ChatBox } from "./editor/ChatBox";
+import { FindBar } from "./editor/FindBar";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
@@ -62,10 +63,17 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && (key === "f" || key === "k")) {
+      // Cmd-K → global search bar. Cmd-F → find within the focused note.
+      if (mod && key === "k") {
         e.preventDefault();
         e.stopPropagation();
         window.dispatchEvent(new Event("mochi:focus-search"));
+        return;
+      }
+      if (mod && key === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        window.dispatchEvent(new Event("mochi:find-in-note"));
         return;
       }
       if (mod && key === "n") {
@@ -180,7 +188,8 @@ export default function App() {
         onJumpToSearchResult={jumpToBlock}
         onOpenSettings={() => setSettingsOpen(true)}
       />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <FindBar />
         <header
           ref={headerRef}
           data-tauri-drag-region
