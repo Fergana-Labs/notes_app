@@ -238,6 +238,40 @@ pub fn list_versions(id: String, state: State<'_, AppState>) -> Result<Vec<Block
     state.with(|ws| db::list_versions(&ws.db, &id))
 }
 
+// =========================================================================
+// Trash
+// =========================================================================
+
+#[tauri::command]
+pub fn list_trash(state: State<'_, AppState>) -> Result<Vec<StoredBlock>> {
+    state.with(|ws| db::list_trash(&ws.db))
+}
+
+/// Restore a trashed block and return the refreshed live block list so the
+/// frontend can patch its store.
+#[tauri::command]
+pub fn restore_block(id: String, state: State<'_, AppState>) -> Result<Vec<StoredBlock>> {
+    state.with(|ws| {
+        db::restore_block(&mut ws.db, &id)?;
+        db::list_blocks(&ws.db)
+    })
+}
+
+/// Permanently delete one trashed block. Returns the remaining trash.
+#[tauri::command]
+pub fn purge_block(id: String, state: State<'_, AppState>) -> Result<Vec<StoredBlock>> {
+    state.with(|ws| {
+        db::purge_block(&ws.db, &id)?;
+        db::list_trash(&ws.db)
+    })
+}
+
+/// Permanently delete everything in the trash.
+#[tauri::command]
+pub fn empty_trash(state: State<'_, AppState>) -> Result<usize> {
+    state.with(|ws| db::empty_trash(&ws.db))
+}
+
 /// Write a UTF-8 text file at `path`. Used for ad-hoc exports (e.g. dumping
 /// selected blocks to a markdown file picked via the save dialog).
 #[tauri::command]

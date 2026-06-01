@@ -106,6 +106,11 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     // Stored as NULL until the user sets one. Idempotent for existing
     // workspaces.
     add_column_if_missing(&conn, "blocks", "title", "TEXT")?;
+    // `deleted_at` implements the trash: NULL = live, unix-ms = soft-
+    // deleted. Trashed blocks are excluded from every list/search/tag
+    // count and recoverable until purged. Idempotent for existing
+    // workspaces.
+    add_column_if_missing(&conn, "blocks", "deleted_at", "INTEGER")?;
     // One-shot copy of legacy `blocks.pinned = 1` rows into the
     // scoped `block_pins` table (with scope = '' meaning "global /
     // All view"). Gated by a settings flag so it only runs once per
@@ -256,12 +261,61 @@ pub fn list_blocks(conn: &Connection) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
     let pin_map = fetch_block_pin_scopes(conn)?;
     let mut stmt = conn.prepare(
-        "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks ORDER BY position",
+        "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks WHERE deleted_at IS NULL ORDER BY position",
     )?;
     let rows = stmt
         .query_map([], |row| row_to_block(row, &tag_map, &pin_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// Blocks currently in the trash (soft-deleted), most-recently-trashed
+/// first. Tags / pins are still projected so the trash UI can show them.
+pub fn list_trash(conn: &Connection) -> Result<Vec<StoredBlock>> {
+    let tag_map = fetch_block_tags(conn)?;
+    let pin_map = fetch_block_pin_scopes(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| row_to_block(row, &tag_map, &pin_map))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Restore a soft-deleted block (clear `deleted_at`) and rebuild its FTS
+/// row so it reappears in search. No-op for live / missing blocks.
+pub fn restore_block(conn: &mut Connection, id: &str) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE blocks SET deleted_at = NULL WHERE id = ?1",
+        params![id],
+    )?;
+    refresh_fts_row(&tx, id)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Permanently delete one trashed block (and its derived rows). Only
+/// touches blocks that are actually in the trash, so a stray call can't
+/// nuke a live block.
+pub fn purge_block(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM blocks WHERE id = ?1 AND deleted_at IS NOT NULL",
+        params![id],
+    )?;
+    conn.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Permanently delete every trashed block. Returns the number purged.
+pub fn empty_trash(conn: &Connection) -> Result<usize> {
+    conn.execute(
+        "DELETE FROM blocks_fts WHERE id IN (SELECT id FROM blocks WHERE deleted_at IS NOT NULL)",
+        [],
+    )?;
+    let n = conn.execute("DELETE FROM blocks WHERE deleted_at IS NOT NULL", [])?;
+    Ok(n)
 }
 
 pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBlock>> {
@@ -273,7 +327,7 @@ pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBloc
          FROM blocks b
          JOIN block_tags bt ON bt.block_id = b.id
          JOIN tags t ON t.id = bt.tag_id
-         WHERE t.name = ?1
+         WHERE t.name = ?1 AND b.deleted_at IS NULL
          ORDER BY b.position",
     )?;
     let rows = stmt
@@ -297,12 +351,13 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
     // that order); the rest fall back to count DESC, then alphabetical.
     let mut stmt = conn.prepare(
         "SELECT t.name,
-                COUNT(bt.block_id) AS c,
+                COUNT(b.id) AS c,
                 t.description,
                 t.sort_order,
                 t.folder
          FROM tags t
          LEFT JOIN block_tags bt ON bt.tag_id = t.id
+         LEFT JOIN blocks b ON b.id = bt.block_id AND b.deleted_at IS NULL
          GROUP BY t.id
          ORDER BY CASE WHEN t.sort_order IS NULL THEN 1 ELSE 0 END,
                   t.sort_order ASC,
@@ -509,14 +564,14 @@ pub fn search(
         conn.prepare(
             "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
              FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
-             WHERE blocks_fts MATCH ?1 AND instr(b.content, ?3) > 0
+             WHERE blocks_fts MATCH ?1 AND instr(b.content, ?3) > 0 AND b.deleted_at IS NULL
              ORDER BY rank LIMIT ?2",
         )?
     } else {
         conn.prepare(
             "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
              FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
-             WHERE blocks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+             WHERE blocks_fts MATCH ?1 AND b.deleted_at IS NULL ORDER BY rank LIMIT ?2",
         )?
     };
     let rows: Vec<SearchHit> = if case_sensitive {
@@ -848,8 +903,15 @@ pub fn save_snapshot(
     }
 
     for id in deleted_ids {
-        // FK cascade clears block_tags rows.
-        tx.execute("DELETE FROM blocks WHERE id = ?1", params![id])?;
+        // Soft delete: move the block to the trash rather than dropping it.
+        // It stays out of every list/search/tag-count (all filter
+        // `deleted_at IS NULL`) but is recoverable until purged. We keep
+        // its block_tags / block_pins so a restore brings them back, and
+        // remove the FTS row so trashed content can't surface in search.
+        tx.execute(
+            "UPDATE blocks SET deleted_at = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
         tx.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
     }
 

@@ -156,6 +156,11 @@ export const ipc = {
     }),
   listVersions: (id: string) =>
     invoke<BlockVersion[]>("list_versions", { id }),
+  listTrash: () => invoke<StoredBlock[]>("list_trash"),
+  restoreBlock: (id: string) =>
+    invoke<StoredBlock[]>("restore_block", { id }),
+  purgeBlock: (id: string) => invoke<StoredBlock[]>("purge_block", { id }),
+  emptyTrash: () => invoke<number>("empty_trash"),
   writeTextFile: (path: string, content: string) =>
     invoke<void>("write_text_file", { path, content }),
   getSetting: (key: string) => invoke<string | null>("get_setting", { key }),
