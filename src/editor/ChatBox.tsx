@@ -18,6 +18,7 @@ import { useChatSettings } from "../stores/chatSettings";
 import { useUISettings } from "../stores/uiSettings";
 import { Hashtag } from "./extensions/Hashtag";
 import { HashtagHighlight } from "./extensions/HashtagHighlight";
+import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import {
   unescapeInlineHashtags,
   getMarkdownPreservingEmptyParas,
@@ -215,7 +216,13 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           HTMLAttributes: { class: "mochi-link" },
         },
       }),
-      Markdown.configure({ html: false, linkify: true, breaks: false }),
+      Markdown.configure({
+        html: false,
+        linkify: true,
+        breaks: false,
+        transformPastedText: true,
+      }),
+      ClipboardSerialize,
       Placeholder.configure({
         placeholder: () =>
           fullscreenRef.current

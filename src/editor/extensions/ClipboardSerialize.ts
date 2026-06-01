@@ -5,19 +5,18 @@ import type { Slice } from "@tiptap/pm/model";
 const key = new PluginKey("mochiClipboardSerialize");
 
 /**
- * When the user copies content out of the canvas, emit clean markdown
- * (without `<!-- block:ID -->` markers and without an extra blank line per
- * block).
+ * When the user copies content out of a card, emit clean markdown — no
+ * `<!-- block:ID -->` markers, and crucially NO blank line between rows.
  *
  * Default ProseMirror text serialization treats every block boundary as
- * `\n\n`. On our schema — where each visible block is a `mochiBlock` wrapper
- * containing one or more inner block-level nodes (paragraph / heading /
- * list / ...) — that produces *two* sets of separators between paragraphs
- * (one for the wrapper, one for the inner block), which shows up as a blank
- * line everywhere when you paste into another app.
+ * `\n\n`, so copying a few short paragraphs or list items into another
+ * app (Obsidian, Notes, …) lands a blank line between every row. Users
+ * read each block as a "row" and want them tight, so we serialize each
+ * top-level node to markdown and join with a single newline.
  *
- * We replace it with the tiptap-markdown serializer, applied per-child
- * inside each mochiBlock and then joined with a single blank line.
+ * (On the legacy single-doc canvas each visible block was a `mochiBlock`
+ * wrapper; we still unwrap those for safety, joining their inner children
+ * with a single newline too.)
  */
 export const ClipboardSerialize = Extension.create({
   name: "mochiClipboardSerialize",
@@ -31,14 +30,12 @@ export const ClipboardSerialize = Extension.create({
           clipboardTextSerializer: (slice: Slice) => {
             const serializer = (editor.storage as any).markdown?.serializer;
             if (!serializer) {
-              return slice.content.textBetween(0, slice.content.size, "\n\n");
+              return slice.content.textBetween(0, slice.content.size, "\n");
             }
             const parts: string[] = [];
             slice.content.forEach((node) => {
               try {
                 if (node.type.name === "mochiBlock") {
-                  // Render each inner child individually; one trailing blank
-                  // line per child, then trimmed and rejoined.
                   const chunks: string[] = [];
                   node.content.forEach((child) => {
                     const md: string = serializer
@@ -46,7 +43,7 @@ export const ClipboardSerialize = Extension.create({
                       .replace(/\s+$/, "");
                     if (md) chunks.push(md);
                   });
-                  if (chunks.length > 0) parts.push(chunks.join("\n\n"));
+                  if (chunks.length > 0) parts.push(chunks.join("\n"));
                 } else {
                   const md: string = serializer
                     .serialize(node)
@@ -58,7 +55,8 @@ export const ClipboardSerialize = Extension.create({
                 if (fallback) parts.push(fallback);
               }
             });
-            return parts.join("\n\n");
+            // Single newline between rows — no blank-line padding.
+            return parts.join("\n");
           },
         },
       }),

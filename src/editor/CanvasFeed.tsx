@@ -65,6 +65,7 @@ import {
 } from "../lib/markdown";
 import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
+import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import { BlockBubbleMenu } from "./BubbleMenu";
 import { BlockMenu } from "./BlockMenu";
 import { VersionHistoryModal } from "./VersionHistoryModal";
@@ -2111,7 +2112,17 @@ function EditableBody({
       UnderlineExtension,
       TaskList,
       TaskItem.configure({ nested: true }),
-      Markdown.configure({ html: false, linkify: true, breaks: false }),
+      // transformPastedText parses pasted plain text (e.g. markdown copied
+      // from Obsidian) through tiptap-markdown so structure + blank lines
+      // (as paragraph breaks) survive instead of landing as literal text.
+      Markdown.configure({
+        html: false,
+        linkify: true,
+        breaks: false,
+        transformPastedText: true,
+      }),
+      // Copy clean markdown with no blank line between rows.
+      ClipboardSerialize,
       Placeholder.configure({
         placeholder: "Type / for commands, # for heading…",
         showOnlyWhenEditable: true,
@@ -3226,7 +3237,13 @@ function ExpandedBlockEditor({
       UnderlineExtension,
       TaskList,
       TaskItem.configure({ nested: true }),
-      Markdown.configure({ html: false, linkify: true, breaks: false }),
+      Markdown.configure({
+        html: false,
+        linkify: true,
+        breaks: false,
+        transformPastedText: true,
+      }),
+      ClipboardSerialize,
       Placeholder.configure({
         placeholder: "Type / for commands…",
         showOnlyWhenEditable: true,
