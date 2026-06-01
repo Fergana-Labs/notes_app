@@ -18,7 +18,10 @@ import { useChatSettings } from "../stores/chatSettings";
 import { useUISettings } from "../stores/uiSettings";
 import { Hashtag } from "./extensions/Hashtag";
 import { HashtagHighlight } from "./extensions/HashtagHighlight";
-import { unescapeInlineHashtags } from "../lib/markdown";
+import {
+  unescapeInlineHashtags,
+  getMarkdownPreservingEmptyParas,
+} from "../lib/markdown";
 
 const TAG_NAME_RE = /^[A-Za-z][A-Za-z0-9_\-/]*$/;
 
@@ -372,8 +375,7 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
     let safety = 0;
     // Each lift mutates the doc; rerun until idempotent or safety cap.
     while (safety++ < 8) {
-      const md: string =
-        (ed.storage as any).markdown?.getMarkdown?.() ?? "";
+      const md: string = getMarkdownPreservingEmptyParas(ed);
       const m = md.match(liftRe);
       if (!m || m.index === undefined) return;
       const tag = m[1].toLowerCase();
@@ -412,7 +414,10 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
 
   const submit = async () => {
     if (!editor) return;
-    const md: string = (editor.storage as any).markdown?.getMarkdown?.() ?? "";
+    // Empty-paragraph-preserving serialize so blank lines the user added
+    // in the capture bar survive into the created note (internal blanks
+    // become NBSP; leading/trailing blanks are trimmed as usual).
+    const md: string = getMarkdownPreservingEmptyParas(editor);
     const cleaned = unescapeInlineHashtags(md).trim();
     const chips = pendingTagsRef.current;
     if (!cleaned && chips.length === 0) return;
