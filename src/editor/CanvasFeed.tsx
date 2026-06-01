@@ -122,6 +122,18 @@ function useVirtualRows<T extends { id: string }>(
   const observersRef = useRef(new Map<string, { disconnect: () => void }>());
   const [sizeVersion, setSizeVersion] = useState(0);
   const [metrics, setMetrics] = useState({ scrollTop: 0, viewportHeight: 0 });
+  // Refs read inside the (frequently-fired) ResizeObserver callback to
+  // anchor the scroll position. Kept as refs so the observer closure
+  // always sees the latest layout without re-subscribing.
+  const offsetsRef = useRef<number[]>([]);
+  const indexByIdRef = useRef<Map<string, number>>(new Map());
+  const listTopRef = useRef(0);
+
+  useEffect(() => {
+    const m = new Map<string, number>();
+    items.forEach((it, i) => m.set(it.id, i));
+    indexByIdRef.current = m;
+  }, [items]);
 
   const updateMetrics = useCallback(() => {
     const scroller = scrollerRef.current;
@@ -132,6 +144,7 @@ function useVirtualRows<T extends { id: string }>(
         scroller.getBoundingClientRect().top +
         scroller.scrollTop
       : 0;
+    listTopRef.current = listTop;
     const next = {
       scrollTop: Math.max(0, scroller.scrollTop - listTop),
       viewportHeight: scroller.clientHeight,
@@ -193,6 +206,7 @@ function useVirtualRows<T extends { id: string }>(
     }
     return { offsets, sizes, totalSize };
   }, [items, sizeVersion]);
+  offsetsRef.current = layout.offsets;
 
   const virtualItems = useMemo(() => {
     if (items.length === 0) return [] as VirtualItem<T>[];
@@ -242,7 +256,23 @@ function useVirtualRows<T extends { id: string }>(
         if (next <= 0) return;
         const prev = sizeByIdRef.current.get(id);
         if (prev == null || Math.abs(prev - next) > 1) {
+          const delta = next - (prev ?? FEED_ROW_ESTIMATE);
           sizeByIdRef.current.set(id, next);
+          // Scroll anchoring: a row whose top sits at or above the current
+          // scroll position changing height would shove everything in the
+          // viewport by `delta` (the classic "jump" when an off-screen card
+          // above gets measured, or when a card expands while scrolled into
+          // it). Compensate scrollTop by the same delta so what the user is
+          // looking at stays put.
+          const scroller = scrollerRef.current;
+          const idx = indexByIdRef.current.get(id);
+          if (scroller && idx != null && delta !== 0) {
+            const rowStart = offsetsRef.current[idx] ?? 0;
+            const viewportTop = scroller.scrollTop - listTopRef.current;
+            if (rowStart < viewportTop) {
+              scroller.scrollTop += delta;
+            }
+          }
           setSizeVersion((v) => v + 1);
         }
       };
