@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { useUISettings } from "../stores/uiSettings";
+import { useChatSettings } from "../stores/chatSettings";
 
 /**
  * Appearance settings: toggles for app-shell visual treatment.
@@ -14,6 +16,12 @@ export function AppearanceTab() {
   const setColorful = useUISettings((s) => s.setColorful);
   const compact = useUISettings((s) => s.compact);
   const setCompact = useUISettings((s) => s.setCompact);
+  const direction = useChatSettings((s) => s.direction);
+  const setDirection = useChatSettings((s) => s.setDirection);
+  const loadChat = useChatSettings((s) => s.load);
+  useEffect(() => {
+    loadChat();
+  }, [loadChat]);
 
   return (
     <div className="space-y-6">
@@ -76,6 +84,33 @@ export function AppearanceTab() {
             </div>
           </div>
         </label>
+      </section>
+
+      <section>
+        <h3 className="font-medium mb-2">Capture</h3>
+        <div className="text-xs text-neutral-500 mb-2">
+          Where a new note from the capture bar lands on the canvas.
+        </div>
+        <div className="inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-sm">
+          {(
+            [
+              ["top", "Top of canvas"],
+              ["bottom", "Bottom of canvas"],
+            ] as const
+          ).map(([d, label]) => (
+            <button
+              key={d}
+              onClick={() => void setDirection(d)}
+              className={`px-3 py-1.5 ${
+                direction === d
+                  ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+                  : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </section>
     </div>
   );

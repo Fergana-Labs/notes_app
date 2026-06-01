@@ -6,13 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ulid } from "ulid";
 import type { Editor } from "@tiptap/core";
 import { splitListItem } from "@tiptap/pm/schema-list";
-import {
-  Send,
-  ArrowUpToLine,
-  ArrowDownToLine,
-  ChevronDown,
-  X,
-} from "lucide-react";
+import { Send, X } from "lucide-react";
 import { useWorkspace } from "../stores/workspace";
 import { useChatSettings } from "../stores/chatSettings";
 import { useUISettings } from "../stores/uiSettings";
@@ -71,14 +65,11 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
   }, [fullscreen]);
 
   const direction = useChatSettings((s) => s.direction);
-  const setDirection = useChatSettings((s) => s.setDirection);
   const loadSettings = useChatSettings((s) => s.load);
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
   const colorful = useUISettings((s) => s.colorful);
-
-  const [showDirMenu, setShowDirMenu] = useState(false);
   // Chips lifted out of the typed text. When the user types `#tag ` (or
   // `#tag,`), the hashtag token is removed from the input and appended
   // here. Submit merges these into the new block's tags field; Backspace
@@ -532,58 +523,6 @@ export function ChatBox({ tagFilter = null, fullscreen = false }: Props) {
           </div>
 
           <div className="flex items-center gap-0.5 px-2 py-2 shrink-0">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowDirMenu((v) => !v)}
-                title={
-                  direction === "top"
-                    ? "New blocks added at top of canvas"
-                    : "New blocks added at bottom of canvas"
-                }
-                className="flex items-center gap-0.5 px-1.5 py-1 rounded text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-              >
-                {direction === "top" ? (
-                  <ArrowUpToLine size={14} />
-                ) : (
-                  <ArrowDownToLine size={14} />
-                )}
-                <ChevronDown size={10} />
-              </button>
-              {showDirMenu && (
-                <div
-                  className="absolute bottom-full right-0 mb-1 w-44 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl py-1 z-10 text-xs"
-                  onMouseLeave={() => setShowDirMenu(false)}
-                >
-                  <button
-                    onClick={() => {
-                      setDirection("top");
-                      setShowDirMenu(false);
-                    }}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 ${
-                      direction === "top"
-                        ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                        : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                    }`}
-                  >
-                    <ArrowUpToLine size={12} /> Add to top
-                  </button>
-                  <button
-                    onClick={() => {
-                      setDirection("bottom");
-                      setShowDirMenu(false);
-                    }}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 ${
-                      direction === "bottom"
-                        ? "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                        : "hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                    }`}
-                  >
-                    <ArrowDownToLine size={12} /> Add to bottom
-                  </button>
-                </div>
-              )}
-            </div>
             <button
               onClick={submit}
               title="Add as new block (Enter)"
