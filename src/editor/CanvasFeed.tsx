@@ -358,6 +358,20 @@ export function CanvasFeed({
 
   const [pendingFocus, setPendingFocus] = useState<PendingFocus | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // IDs of long cards the user has expanded in-place (by clicking into
+  // them or hitting "Show more"). Lives at the feed level so expansion
+  // survives clicking off the card — it only resets when the user
+  // switches tag / sort / view (the reset effect below).
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const setCardExpanded = useCallback((id: string, on: boolean) => {
+    setExpandedIds((prev) => {
+      if (prev.has(id) === on) return prev;
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   const [historyBlockId, setHistoryBlockId] = useState<string | null>(null);
   const [sort, setSort] = useState<SortMode>("canvas");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1170,6 +1184,12 @@ export function CanvasFeed({
   useEffect(() => {
     setExpandedId(null);
   }, [tagFilter]);
+  // Collapse all in-place expansions when the visible slice changes
+  // (different tag / sort / view). Within a slice, expansions persist
+  // even after the card loses focus.
+  useEffect(() => {
+    setExpandedIds(new Set());
+  }, [tagFilter, sort, viewMode]);
   return (
     <>
     <div
@@ -1399,6 +1419,8 @@ export function CanvasFeed({
                   pendingFocus?.id === b.id ? pendingFocus.edge : null
                 }
                 selected={selected.has(b.id)}
+                expanded={expandedIds.has(b.id)}
+                onExpandedChange={(on) => setCardExpanded(b.id, on)}
                 groupDragGhost={groupDragActive && selected.has(b.id) && b.id !== activeDragId}
                 dropIndicator={
                   dropTarget?.id === b.id ? dropTarget.position : null
@@ -1476,6 +1498,10 @@ interface CardProps {
   scope: string;
   pendingFocus: "start" | "end" | null;
   selected: boolean;
+  /** Whether this (long) card is expanded in-place. Lifted to the feed
+   *  so it survives the card losing focus; reset on tag/sort/view change. */
+  expanded: boolean;
+  onExpandedChange: (on: boolean) => void;
   /** True when this card is one of the SELECTED siblings of an
    *  in-progress group drag (but not the active card being dragged
    *  itself). Used to fade the card visually so the group reads as
@@ -1509,6 +1535,8 @@ const FeedCard = memo(
     scope,
     pendingFocus,
     selected,
+    expanded,
+    onExpandedChange,
     groupDragGhost,
     dropIndicator,
     highlightQuery,
@@ -1572,11 +1600,16 @@ const FeedCard = memo(
       const lines = block.content.split("\n").length;
       return lines > 12 || block.content.length > 700;
     }, [block.content]);
-    const [userExpanded, setUserExpanded] = useState(false);
+    const pinned = block.pinned_scopes.includes(scope);
     const [editorFocused, setEditorFocused] = useState(false);
     useEffect(() => {
       if (!liveEditor) return;
-      const onFocus = () => setEditorFocused(true);
+      const onFocus = () => {
+        setEditorFocused(true);
+        // Focusing a long card expands it persistently — clicking off
+        // won't re-collapse it (only a tag/sort/view switch will).
+        if (isLong) onExpandedChange(true);
+      };
       const onBlur = () => setEditorFocused(false);
       liveEditor.on("focus", onFocus);
       liveEditor.on("blur", onBlur);
@@ -1585,8 +1618,10 @@ const FeedCard = memo(
         liveEditor.off("focus", onFocus);
         liveEditor.off("blur", onBlur);
       };
-    }, [liveEditor]);
-    const collapsed = isLong && !userExpanded && !editorFocused;
+    }, [liveEditor, isLong, onExpandedChange]);
+    // Pinned cards never collapse — they're surfaced on purpose, so the
+    // user always sees them in full.
+    const collapsed = isLong && !expanded && !editorFocused && !pinned;
 
     const blockTypeId = (() => {
       const first = block.content.split("\n")[0] ?? "";
@@ -1778,7 +1813,7 @@ const FeedCard = memo(
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setUserExpanded(true);
+                  onExpandedChange(true);
                 }}
                 className="pointer-events-auto text-xs px-2.5 py-1 rounded-full border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-300 hover:border-neutral-400 dark:hover:border-neutral-500 shadow-sm"
               >
@@ -1787,7 +1822,7 @@ const FeedCard = memo(
             </div>
           )}
         </div>
-        {isLong && userExpanded && !editorFocused && (
+        {isLong && expanded && !editorFocused && !pinned && (
           <div
             contentEditable={false}
             className="flex justify-center pb-2 -mt-1"
@@ -1797,7 +1832,7 @@ const FeedCard = memo(
               onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
                 e.stopPropagation();
-                setUserExpanded(false);
+                onExpandedChange(false);
               }}
               className="text-xs px-2.5 py-0.5 rounded-full text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
             >
@@ -1878,6 +1913,7 @@ const FeedCard = memo(
     prev.scope === next.scope &&
     prev.pendingFocus === next.pendingFocus &&
     prev.selected === next.selected &&
+    prev.expanded === next.expanded &&
     prev.groupDragGhost === next.groupDragGhost &&
     prev.dropIndicator === next.dropIndicator &&
     prev.highlightQuery === next.highlightQuery &&
