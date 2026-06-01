@@ -8,6 +8,10 @@ interface UndoEntry {
   before: BlockInput[];
   /** IDs that existed before — used to compute which IDs to delete on undo. */
   beforeIds: string[];
+  /** IDs this action created (present after `fn` but not before). Undo
+   *  deletes ONLY these — never blocks added later by an unrelated path
+   *  (e.g. the capture bar), which would otherwise vanish on Cmd-Z. */
+  createdIds: string[];
 }
 
 interface WorkspaceState {
@@ -203,11 +207,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   runWithUndo: async (label, fn) => {
     const before = snapshotBlocks(get().blocks);
     const beforeIds = before.map((b) => b.id);
+    const beforeIdSet = new Set(beforeIds);
     await fn();
+    // IDs that this action introduced — the only ones undo may delete.
+    const createdIds = get()
+      .blocks.map((b) => b.id)
+      .filter((id) => !beforeIdSet.has(id));
     set((s) => ({
       undoStack: [
         ...s.undoStack.slice(-49), // cap at 50 entries
-        { label, before, beforeIds },
+        { label, before, beforeIds, createdIds },
       ],
     }));
   },
@@ -217,10 +226,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (stack.length === 0) return;
     const entry = stack[stack.length - 1];
 
-    const beforeIdSet = new Set(entry.beforeIds);
-    const currentIds = get().blocks.map((b) => b.id);
-    const toDelete: string[] = [];
-    for (const id of currentIds) if (!beforeIdSet.has(id)) toDelete.push(id);
+    // Delete ONLY the blocks this action created and that still exist —
+    // never blocks added afterward by another path (a stale full-doc
+    // diff used to delete those, which is how Cmd-Z "ate" notes created
+    // after a structural action).
+    const currentIdSet = new Set(get().blocks.map((b) => b.id));
+    const toDelete = entry.createdIds.filter((id) => currentIdSet.has(id));
 
     // Pop first so this undo doesn't accidentally re-push itself onto the
     // stack via `saveSnapshot` running.
