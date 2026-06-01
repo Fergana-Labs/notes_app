@@ -33,3 +33,42 @@ export const subscribeActiveEditor = (fn: (e: Editor | null) => void) => {
     subscribers.delete(fn);
   };
 };
+
+// ── Cross-window focus restoration ──────────────────────────────────────
+// Switching to another app blurs the webview, dropping the editor's DOM
+// focus + selection; the browser doesn't restore them on return. We
+// remember the last focused editor and its caret so we can put the user
+// back exactly where they were typing. Unlike `activeEditor`, this is NOT
+// cleared on blur — only replaced when a different editor takes focus.
+let lastFocused: Editor | null = null;
+let lastSelection: { from: number; to: number } | null = null;
+
+export const rememberFocus = (e: Editor) => {
+  lastFocused = e;
+  lastSelection = { from: e.state.selection.from, to: e.state.selection.to };
+};
+
+export const rememberSelection = (e: Editor) => {
+  if (lastFocused === e) {
+    lastSelection = { from: e.state.selection.from, to: e.state.selection.to };
+  }
+};
+
+/** Put focus + caret back where the user last was. Called when the OS
+ *  window regains focus and nothing else in the app is focused. */
+export const restoreLastFocus = () => {
+  const e = lastFocused;
+  if (!e || e.isDestroyed) return;
+  try {
+    const sel = lastSelection;
+    if (sel) {
+      const size = e.state.doc.content.size;
+      const from = Math.min(sel.from, size);
+      const to = Math.min(sel.to, size);
+      e.commands.setTextSelection({ from, to });
+    }
+    e.commands.focus();
+  } catch {
+    /* editor may have been torn down between blur and refocus */
+  }
+};

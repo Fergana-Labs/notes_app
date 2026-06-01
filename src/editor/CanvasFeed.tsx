@@ -67,7 +67,12 @@ import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
 import { FindInNote } from "./extensions/FindInNote";
-import { setActiveEditor, clearActiveEditorIf } from "./activeEditor";
+import {
+  setActiveEditor,
+  clearActiveEditorIf,
+  rememberFocus,
+  rememberSelection,
+} from "./activeEditor";
 import { BlockBubbleMenu } from "./BubbleMenu";
 import { BlockMenu } from "./BlockMenu";
 import { VersionHistoryModal } from "./VersionHistoryModal";
@@ -2334,6 +2339,8 @@ function EditableBody({
       saveDebounced(md);
     },
     onSelectionUpdate: ({ editor }) => {
+      // Remember the caret so an app-switch can restore it on return.
+      rememberSelection(editor);
       // Pair to onUpdate above: doc-changes-only would miss the
       // "user moved cursor out of a tag without typing more"
       // case (arrow keys, mouse click). When that happens, fire a
@@ -2343,8 +2350,10 @@ function EditableBody({
       saveDebounced(md);
     },
     onFocus: ({ editor }) => {
-      // Register as the active editor so Cmd-F (find in note) binds here.
+      // Register as the active editor so Cmd-F (find in note) binds here,
+      // and remember it for cross-window focus restoration.
       setActiveEditor(editor);
+      rememberFocus(editor);
     },
     onBlur: ({ editor }) => {
       // Blur is the user committing — flush any pending save, AND
@@ -3394,12 +3403,14 @@ function ExpandedBlockEditor({
       saveDebounced(md);
     },
     onSelectionUpdate: ({ editor }) => {
+      rememberSelection(editor);
       if (cursorInsideHashtag(editor)) return;
       const md = getMarkdownPreservingEmptyParas(editor);
       saveDebounced(md);
     },
     onFocus: ({ editor }) => {
       setActiveEditor(editor);
+      rememberFocus(editor);
     },
     onBlur: ({ editor }) => {
       saveDebounced.flush();

@@ -3,6 +3,7 @@ import { Sidebar } from "./sidebar/Sidebar";
 import { CanvasFeed } from "./editor/CanvasFeed";
 import { ChatBox } from "./editor/ChatBox";
 import { FindBar } from "./editor/FindBar";
+import { restoreLastFocus } from "./editor/activeEditor";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
 import { useWorkspace } from "./stores/workspace";
@@ -101,6 +102,26 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  // Restore the editor caret after switching back from another app/window.
+  // The webview blur drops DOM focus + selection; we put the user back
+  // where they were typing — but only when nothing else in the app grabbed
+  // focus in the meantime (so we don't yank focus off the search box etc.).
+  useEffect(() => {
+    const onWindowFocus = () => {
+      const active = document.activeElement;
+      const nothingFocused =
+        !active ||
+        active === document.body ||
+        active.tagName === "HTML";
+      if (nothingFocused) {
+        // Defer a tick so the webview settles before we set selection.
+        requestAnimationFrame(() => restoreLastFocus());
+      }
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => window.removeEventListener("focus", onWindowFocus);
   }, []);
 
   // Agent-edit detector: poll blocks.db mtime every 2s. Only triggers a
