@@ -418,6 +418,9 @@ export function CanvasFeed({
   // the old TagsView pattern.
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searching, setSearching] = useState(false);
+  // Quick filter: show only notes that carry no tags. Session-local
+  // (like the old titles-only toggle); lives in the feed toolbar.
+  const [untaggedOnly, setUntaggedOnly] = useState(false);
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
@@ -460,6 +463,9 @@ export function CanvasFeed({
     if (searchHitIds) {
       arr = arr.filter((b) => searchHitIds.has(b.id));
     }
+    if (untaggedOnly) {
+      arr = arr.filter((b) => b.tags.length === 0);
+    }
     if (dateRange.from != null || dateRange.to != null) {
       const from = dateRange.from ?? -Infinity;
       const to = dateRange.to ?? Infinity;
@@ -489,6 +495,7 @@ export function CanvasFeed({
     focusedBlockId,
     dateRange.from,
     dateRange.to,
+    untaggedOnly,
   ]);
 
   // Drop selections whose blocks are no longer visible (filter changed,
@@ -1287,7 +1294,22 @@ export function CanvasFeed({
               ? "searching…"
               : `${sorted.length} block${sorted.length === 1 ? "" : "s"}`}
           </span>
-          <div className="mochi-view-toggle ml-auto inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
+          <button
+            onClick={() => setUntaggedOnly((v) => !v)}
+            title={
+              untaggedOnly
+                ? "Showing only notes with no tags"
+                : "Show only notes without a tag"
+            }
+            className={`ml-auto inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${
+              untaggedOnly
+                ? "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                : "border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            }`}
+          >
+            Untagged
+          </button>
+          <div className="mochi-view-toggle inline-flex items-center rounded border border-neutral-200 dark:border-neutral-800 overflow-hidden text-xs">
             {(
               [
                 ["card", "Card"],
