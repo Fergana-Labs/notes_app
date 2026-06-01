@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { Settings as SettingsIcon, Trash2, CalendarDays } from "lucide-react";
 import { TagsPane } from "./TagsPane";
 import { SearchResultsPane } from "./SearchResultsPane";
 import { useDragRegion } from "../hooks/useDragRegion";
@@ -16,6 +16,8 @@ interface Props {
   onOpenSettings: () => void;
   trashActive: boolean;
   onOpenTrash: () => void;
+  dailyActive: boolean;
+  onOpenDaily: () => void;
 }
 
 /**
@@ -36,6 +38,8 @@ export function Sidebar({
   onOpenSettings,
   trashActive,
   onOpenTrash,
+  dailyActive,
+  onOpenDaily,
 }: Props) {
   const navRef = useRef<HTMLElement>(null);
   useDragRegion(navRef);
@@ -91,6 +95,17 @@ export function Sidebar({
         )}
       </div>
 
+      <button
+        onClick={onOpenDaily}
+        className={`flex items-center gap-2 px-3 py-2 text-xs border-t border-neutral-200 dark:border-neutral-800 ${
+          dailyActive
+            ? "bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-medium"
+            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100"
+        }`}
+      >
+        <CalendarDays size={14} />
+        <span>Daily note</span>
+      </button>
       <button
         onClick={onOpenTrash}
         className={`flex items-center gap-2 px-3 py-2 text-xs border-t border-neutral-200 dark:border-neutral-800 ${
