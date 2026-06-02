@@ -9,9 +9,18 @@ import { Markdown } from "tiptap-markdown";
 import type { Editor } from "@tiptap/core";
 import { CornerDownRight } from "lucide-react";
 import { ipc } from "../lib/ipc";
-import { getMarkdownPreservingEmptyParas } from "../lib/markdown";
+import {
+  getMarkdownPreservingEmptyParas,
+  serializeFragmentPreservingEmptyParas,
+} from "../lib/markdown";
 import { debounce } from "../lib/debounce";
-import { todayStr, dailyDateLabel, flushDailyToBlocks } from "../lib/daily";
+import {
+  todayStr,
+  dailyDateLabel,
+  splitDailyIntoSegments,
+  flushSegmentsToBlocks,
+} from "../lib/daily";
+import { DailyFlushModal } from "./DailyFlushModal";
 import { Hashtag } from "./extensions/Hashtag";
 import { SlashMenu } from "./extensions/SlashMenu";
 import { ClipboardSerialize } from "./extensions/ClipboardSerialize";
@@ -70,6 +79,8 @@ function DailyEditor({
   initial: string;
 }) {
   const [flushMsg, setFlushMsg] = useState<string | null>(null);
+  // Segments awaiting selection in the "Add to notes" modal (null = closed).
+  const [flushSegments, setFlushSegments] = useState<string[] | null>(null);
   const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
   const pickerSyncRef = useRef<(ed: Editor) => void>(() => {});
   const pickerCloseRef = useRef<() => void>(() => {});
@@ -149,15 +160,27 @@ function DailyEditor({
 
   useEffect(() => () => saveDebounced.flush(), [saveDebounced]);
 
-  const flushNow = async () => {
+  // Open the picker modal. When there's a text selection, only that part
+  // is offered; otherwise the whole note. Either way it's split on "---".
+  const openFlush = () => {
     if (!editor) return;
-    const md = getMarkdownPreservingEmptyParas(editor);
-    const n = await flushDailyToBlocks(md);
-    setFlushMsg(
-      n === 0
-        ? "Nothing to add (separate entries with ---)."
-        : `Added ${n} block${n === 1 ? "" : "s"} to your notes.`,
-    );
+    const sel = editor.state.selection;
+    const md = sel.empty
+      ? getMarkdownPreservingEmptyParas(editor)
+      : serializeFragmentPreservingEmptyParas(editor, sel.content().content);
+    const segs = splitDailyIntoSegments(md);
+    if (segs.length === 0) {
+      setFlushMsg("Nothing to add (write something, separate entries with ---).");
+      window.setTimeout(() => setFlushMsg(null), 3000);
+      return;
+    }
+    setFlushSegments(segs);
+  };
+
+  const confirmFlush = async (selected: string[]) => {
+    setFlushSegments(null);
+    const n = await flushSegmentsToBlocks(selected);
+    setFlushMsg(`Added ${n} block${n === 1 ? "" : "s"} to your notes.`);
     window.setTimeout(() => setFlushMsg(null), 3000);
   };
 
@@ -175,8 +198,8 @@ function DailyEditor({
         )}
         <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={() => void flushNow()}
-            title="Split on horizontal rules and add each entry to your notes"
+            onClick={openFlush}
+            title="Pick which entries (split on ---) to add to your notes; select text first to add just that part"
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             <CornerDownRight size={13} /> Add to notes
@@ -190,6 +213,13 @@ function DailyEditor({
           {picker.dropdown}
         </div>
       </div>
+      {flushSegments && (
+        <DailyFlushModal
+          segments={flushSegments}
+          onClose={() => setFlushSegments(null)}
+          onConfirm={confirmFlush}
+        />
+      )}
     </div>
   );
 }

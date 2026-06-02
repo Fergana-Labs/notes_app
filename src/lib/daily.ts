@@ -41,17 +41,19 @@ export function splitDailyIntoSegments(md: string): string[] {
 }
 
 /**
- * Append a daily note's segments to the canvas as new blocks (bottom, in
+ * Append the given segments to the canvas as new blocks (bottom, in
  * order). Returns how many blocks were created. The daily note itself is
  * left intact — it's a persistent archive, not a draft.
  */
-export async function flushDailyToBlocks(md: string): Promise<number> {
-  const segments = splitDailyIntoSegments(md);
-  if (segments.length === 0) return 0;
+export async function flushSegmentsToBlocks(
+  segments: string[],
+): Promise<number> {
+  const segs = segments.map((s) => s.trim()).filter((s) => s.length > 0);
+  if (segs.length === 0) return 0;
   const ws = useWorkspace.getState();
   const all = [...ws.blocks].sort((a, b) => a.position - b.position);
   let pos = (all[all.length - 1]?.position ?? -1) + 1;
-  const inputs = segments.map((content) => ({
+  const inputs = segs.map((content) => ({
     id: ulid(),
     content,
     position: pos++,
@@ -60,7 +62,12 @@ export async function flushDailyToBlocks(md: string): Promise<number> {
     heading_level: null as number | null,
   }));
   await ws.saveSnapshot(inputs, []);
-  return segments.length;
+  return segs.length;
+}
+
+/** Split a daily-note draft and flush every segment. */
+export async function flushDailyToBlocks(md: string): Promise<number> {
+  return flushSegmentsToBlocks(splitDailyIntoSegments(md));
 }
 
 /**
