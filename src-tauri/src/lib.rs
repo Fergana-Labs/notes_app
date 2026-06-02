@@ -36,6 +36,7 @@ pub fn run() {
             commands::empty_trash,
             commands::list_daily_notes,
             commands::get_daily_note,
+            commands::search_daily_notes,
             commands::save_daily_note,
             commands::write_text_file,
             commands::get_setting,

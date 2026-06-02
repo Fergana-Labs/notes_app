@@ -49,6 +49,7 @@ export default function App() {
   const colorful = useUISettings((s) => s.colorful);
   const compact = useUISettings((s) => s.compact);
   const hideHeaders = useUISettings((s) => s.viewMode === "note");
+  const sidebarView = useUISettings((s) => s.sidebarView);
   useEffect(() => {
     bootstrap();
     loadUISettings();
@@ -259,17 +260,14 @@ export default function App() {
         </header>
         <div className="flex-1 flex flex-col overflow-hidden">
           {dailyDate ? (
-            <DailyNotePane
-              date={dailyDate}
-              onClose={() => setDailyDate(null)}
-            />
+            <DailyNotePane date={dailyDate} />
           ) : showTrash ? (
             <TrashPane onClose={() => setShowTrash(false)} />
           ) : (
             <>
               <CanvasFeed
                 key={path}
-                searchQuery={highlightQuery}
+                searchQuery={sidebarView === "daily" ? "" : highlightQuery}
                 caseSensitive={caseSensitive}
                 activeSearchId={searchActiveId}
                 tagFilter={tagFilter}

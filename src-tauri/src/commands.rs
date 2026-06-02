@@ -297,6 +297,14 @@ pub fn get_daily_note(date: String, state: State<'_, AppState>) -> Result<String
 }
 
 #[tauri::command]
+pub fn search_daily_notes(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<DailyNoteMeta>> {
+    state.with(|ws| db::search_daily_notes(&ws.db, &query))
+}
+
+#[tauri::command]
 pub fn save_daily_note(
     date: String,
     content: String,

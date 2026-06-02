@@ -1307,6 +1307,47 @@ pub fn get_daily_note(conn: &Connection, date: &str) -> Result<String> {
     Ok(content.unwrap_or_default())
 }
 
+/// Search daily notes by content (case-insensitive substring). Returns
+/// matching days newest-first, with the preview set to the first matching
+/// line so the sidebar shows where the hit is.
+pub fn search_daily_notes(conn: &Connection, query: &str) -> Result<Vec<DailyNoteMeta>> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    // Escape LIKE wildcards in the user's query.
+    let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{}%", escaped);
+    let ql = q.to_lowercase();
+    let mut stmt = conn.prepare(
+        "SELECT date, content, updated_at FROM daily_notes
+         WHERE content LIKE ?1 ESCAPE '\\' ORDER BY date DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![pattern], |row| {
+            let date: String = row.get(0)?;
+            let content: String = row.get(1)?;
+            let updated_at: i64 = row.get(2)?;
+            // Preview = first line containing the query, else the usual one.
+            let snippet = content
+                .lines()
+                .find(|l| l.to_lowercase().contains(&ql))
+                .map(|l| {
+                    let t = l.trim();
+                    t.chars().take(80).collect::<String>()
+                })
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| daily_preview(&content));
+            Ok(DailyNoteMeta {
+                date,
+                updated_at,
+                preview: snippet,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 pub fn save_daily_note(conn: &Connection, date: &str, content: &str) -> Result<()> {
     let now = Utc::now().timestamp_millis();
     conn.execute(

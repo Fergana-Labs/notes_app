@@ -11,18 +11,23 @@ import { todayStr, dailyDateLabel, dailyGroupLabel } from "../lib/daily";
 export function DailyNotesList({
   selectedDate,
   onSelect,
+  query = "",
 }: {
   selectedDate: string | null;
   onSelect: (date: string) => void;
+  /** When non-empty, the list shows daily notes matching this search
+   *  (content match) instead of the full archive. */
+  query?: string;
 }) {
   const [notes, setNotes] = useState<DailyNoteMeta[]>([]);
   const today = todayStr();
+  const q = query.trim();
+  const searching = q.length > 0;
 
   useEffect(() => {
     let cancelled = false;
     const refresh = () =>
-      ipc
-        .listDailyNotes()
+      (searching ? ipc.searchDailyNotes(q) : ipc.listDailyNotes())
         .then((n) => {
           if (!cancelled) setNotes(n);
         })
@@ -33,12 +38,21 @@ export function DailyNotesList({
       cancelled = true;
       window.removeEventListener("mochi:daily-saved", refresh);
     };
-  }, []);
+  }, [searching, q]);
 
-  // Ensure Today is present at the top even when it has no saved content.
-  const withToday: DailyNoteMeta[] = notes.some((n) => n.date === today)
-    ? notes
-    : [{ date: today, updated_at: 0, preview: "" }, ...notes];
+  // Outside of search, pin Today at the top even with no saved content.
+  const withToday: DailyNoteMeta[] =
+    searching || notes.some((n) => n.date === today)
+      ? notes
+      : [{ date: today, updated_at: 0, preview: "" }, ...notes];
+
+  if (searching && notes.length === 0) {
+    return (
+      <div className="p-3 text-xs text-neutral-500 italic">
+        No daily notes match “{q}”.
+      </div>
+    );
+  }
 
   // Group consecutively by bucket label, preserving date-desc order.
   const groups: { label: string; items: DailyNoteMeta[] }[] = [];

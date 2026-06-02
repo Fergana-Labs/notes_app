@@ -83,63 +83,58 @@ export function Sidebar({
         className="h-11 pl-[80px] pr-3 border-b border-neutral-200 dark:border-neutral-800 select-none"
       />
 
-      {searchActive ? (
-        <>
-          <div className="px-3 py-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400 border-b border-neutral-100 dark:border-neutral-800">
-            Search
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            <SearchResultsPane
-              query={searchQuery}
-              caseSensitive={caseSensitive}
-              activeId={searchActiveId}
-              onJump={(id) => onJumpToSearchResult(id)}
-            />
-          </div>
-        </>
-      ) : (
-        <>
-          {/* Source switcher: daily notes / priority tags / all tags. */}
-          <div className="flex items-center gap-1 px-2 pt-2 pb-1">
-            {tabs.map((t) => {
-              const active = sidebarView === t.id;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => {
-                    void setSidebarView(t.id);
-                    // Daily jumps straight to today's note; the tag tabs
-                    // leave the daily/trash overlay and return to the feed.
-                    if (t.id === "daily") onSelectDaily(todayStr());
-                    else onShowFeed();
-                  }}
-                  title={t.label}
-                  className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs ${
-                    active
-                      ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
-                      : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                  }`}
-                >
-                  <t.icon size={14} />
-                  <span className="hidden xl:inline">{t.label}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {sidebarView === "daily" ? (
-              <DailyNotesList selectedDate={dailyDate} onSelect={onSelectDaily} />
-            ) : (
-              <TagsPane
-                selected={tagFilter}
-                onOpenTag={onSelectTag}
-                onClearTag={onClearFilter}
-                scope={sidebarView === "priority" ? "priority" : "all"}
-              />
-            )}
-          </div>
-        </>
-      )}
+      {/* Source switcher: daily notes / priority tags / all tags. Always
+          visible — search scopes to whichever space is active. */}
+      <div className="flex items-center gap-1 px-2 pt-2 pb-1">
+        {tabs.map((t) => {
+          const active = sidebarView === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => {
+                void setSidebarView(t.id);
+                // Daily jumps straight to today's note; the tag tabs
+                // leave the daily/trash overlay and return to the feed.
+                if (t.id === "daily") onSelectDaily(todayStr());
+                else onShowFeed();
+              }}
+              title={t.label}
+              className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs ${
+                active
+                  ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300"
+                  : "text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+              }`}
+            >
+              <t.icon size={14} />
+              <span className="hidden xl:inline">{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {sidebarView === "daily" ? (
+          // Daily space: search filters daily notes; otherwise the archive.
+          <DailyNotesList
+            selectedDate={dailyDate}
+            onSelect={onSelectDaily}
+            query={searchActive ? searchQuery : ""}
+          />
+        ) : searchActive ? (
+          <SearchResultsPane
+            query={searchQuery}
+            caseSensitive={caseSensitive}
+            activeId={searchActiveId}
+            onJump={(id) => onJumpToSearchResult(id)}
+          />
+        ) : (
+          <TagsPane
+            selected={tagFilter}
+            onOpenTag={onSelectTag}
+            onClearTag={onClearFilter}
+            scope={sidebarView === "priority" ? "priority" : "all"}
+          />
+        )}
+      </div>
 
       <button
         onClick={onOpenTrash}

@@ -169,6 +169,8 @@ export const ipc = {
     invoke<BlockVersion[]>("list_versions", { id }),
   listDailyNotes: () => invoke<DailyNoteMeta[]>("list_daily_notes"),
   getDailyNote: (date: string) => invoke<string>("get_daily_note", { date }),
+  searchDailyNotes: (query: string) =>
+    invoke<DailyNoteMeta[]>("search_daily_notes", { query }),
   saveDailyNote: (date: string, content: string) =>
     invoke<void>("save_daily_note", { date, content }),
   listTrash: () => invoke<StoredBlock[]>("list_trash"),

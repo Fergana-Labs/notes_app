@@ -32,13 +32,7 @@ import {
  * tags). Past days are read/editable too — nothing is destroyed. Carries
  * the same `#` autocomplete as the note editor.
  */
-export function DailyNotePane({
-  date,
-  onClose,
-}: {
-  date: string;
-  onClose: () => void;
-}) {
+export function DailyNotePane({ date }: { date: string }) {
   const [initial, setInitial] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,17 +59,15 @@ export function DailyNotePane({
     );
   }
 
-  return <DailyEditor key={date} date={date} initial={initial} onClose={onClose} />;
+  return <DailyEditor key={date} date={date} initial={initial} />;
 }
 
 function DailyEditor({
   date,
   initial,
-  onClose,
 }: {
   date: string;
   initial: string;
-  onClose: () => void;
 }) {
   const [flushMsg, setFlushMsg] = useState<string | null>(null);
   const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
@@ -188,13 +180,6 @@ function DailyEditor({
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           >
             <CornerDownRight size={13} /> Add to notes
-          </button>
-          <button
-            onClick={onClose}
-            title="Back to notes"
-            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 text-xs"
-          >
-            Close
           </button>
         </div>
       </div>
