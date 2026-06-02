@@ -34,6 +34,10 @@ import {
   rememberSelection,
 } from "./activeEditor";
 
+// Session-scoped scroll memory per daily-note date, so reopening a day
+// returns to where you left off instead of jumping to the bottom.
+const scrollByDate = new Map<string, number>();
+
 /**
  * Daily note for a specific date, rendered full-screen in the main panel.
  * Loads that day's saved markdown, autosaves edits back to it, and offers
@@ -84,6 +88,10 @@ function DailyEditor({
   const pickerKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
   const pickerSyncRef = useRef<(ed: Editor) => void>(() => {});
   const pickerCloseRef = useRef<() => void>(() => {});
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // If we've seen this date before, restore its scroll instead of
+  // autofocusing to the end (which would jump to the bottom).
+  const hasSavedScroll = scrollByDate.has(date);
 
   const saveDebounced = useMemo(
     () =>
@@ -125,7 +133,7 @@ function DailyEditor({
         SlashMenu,
       ],
       content: initial,
-      autofocus: date === todayStr() ? "end" : false,
+      autofocus: date === todayStr() && !hasSavedScroll ? "end" : false,
       editorProps: {
         handleKeyDown(_view, event) {
           return pickerKeyDownRef.current(event);
@@ -159,6 +167,23 @@ function DailyEditor({
   }, [picker.handleKeyDown, picker.sync, picker.close]);
 
   useEffect(() => () => saveDebounced.flush(), [saveDebounced]);
+
+  // Restore the remembered scroll for this date on mount; persist the
+  // latest scroll on unmount (the onScroll handler keeps it fresh too).
+  useEffect(() => {
+    const el = scrollRef.current;
+    const saved = scrollByDate.get(date);
+    if (el && saved != null) {
+      requestAnimationFrame(() => {
+        el.scrollTop = saved;
+      });
+    }
+    return () => {
+      if (scrollRef.current) {
+        scrollByDate.set(date, scrollRef.current.scrollTop);
+      }
+    };
+  }, [date]);
 
   // Open the picker modal. When there's a text selection, only that part
   // is offered; otherwise the whole note. Either way it's split on "---".
@@ -206,7 +231,11 @@ function DailyEditor({
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        onScroll={(e) => scrollByDate.set(date, e.currentTarget.scrollTop)}
+        className="flex-1 overflow-y-auto"
+      >
         <div className="max-w-3xl mx-auto px-10 pt-8 pb-32 text-base leading-relaxed mochi-expanded-editor">
           <BlockBubbleMenu editor={editor} />
           <EditorContent editor={editor} />
