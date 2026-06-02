@@ -524,8 +524,18 @@ pub fn delete_tag(
             }
         }
         "delete_blocks" => {
+            // Soft-delete the blocks into the trash (recoverable) rather
+            // than dropping them. We remove the tag row afterwards, which
+            // cascades its block_tags — so a later restore brings the
+            // block back without this (now-deleted) tag but keeps any
+            // others. FTS rows are removed so trashed content can't surface
+            // in search.
+            let now = Utc::now().timestamp_millis();
             for id in &affected_ids {
-                tx.execute("DELETE FROM blocks WHERE id = ?1", params![id])?;
+                tx.execute(
+                    "UPDATE blocks SET deleted_at = ?2 WHERE id = ?1",
+                    params![id, now],
+                )?;
                 tx.execute("DELETE FROM blocks_fts WHERE id = ?1", params![id])?;
             }
             tx.execute("DELETE FROM tags WHERE name = ?1", params![lname])?;
