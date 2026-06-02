@@ -261,7 +261,10 @@ export default function App() {
         </header>
         <div className="flex-1 flex flex-col overflow-hidden">
           {dailyDate ? (
-            <DailyNotePane date={dailyDate} />
+            <>
+              <DailyNotePane date={dailyDate} />
+              <ChatBox tagFilter={tagFilter} fullscreen />
+            </>
           ) : showTrash ? (
             <TrashPane onClose={() => setShowTrash(false)} />
           ) : (
