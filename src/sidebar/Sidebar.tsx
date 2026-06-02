@@ -27,6 +27,8 @@ interface Props {
   /** Currently-open daily note date (for highlighting), or null. */
   dailyDate: string | null;
   onSelectDaily: (date: string) => void;
+  /** Return the main panel to the notes feed (leave daily/trash). */
+  onShowFeed: () => void;
 }
 
 /**
@@ -48,6 +50,7 @@ export function Sidebar({
   onOpenTrash,
   dailyDate,
   onSelectDaily,
+  onShowFeed,
 }: Props) {
   const navRef = useRef<HTMLElement>(null);
   useDragRegion(navRef);
@@ -105,9 +108,10 @@ export function Sidebar({
                   key={t.id}
                   onClick={() => {
                     void setSidebarView(t.id);
-                    // Hitting the calendar jumps straight to today's note,
-                    // rather than just showing the list.
+                    // Daily jumps straight to today's note; the tag tabs
+                    // leave the daily/trash overlay and return to the feed.
                     if (t.id === "daily") onSelectDaily(todayStr());
+                    else onShowFeed();
                   }}
                   title={t.label}
                   className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs ${

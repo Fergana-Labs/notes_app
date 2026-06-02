@@ -231,6 +231,10 @@ export default function App() {
           setDailyDate(d);
           setShowTrash(false);
         }}
+        onShowFeed={() => {
+          setDailyDate(null);
+          setShowTrash(false);
+        }}
       />
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <FindBar />
