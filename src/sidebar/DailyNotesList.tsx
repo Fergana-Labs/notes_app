@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
 import { ipc, type DailyNoteMeta } from "../lib/ipc";
 import { todayStr, dailyDateLabel, dailyGroupLabel } from "../lib/daily";
 
@@ -52,13 +51,6 @@ export function DailyNotesList({
 
   return (
     <div className="p-2 space-y-2">
-      <button
-        onClick={() => onSelect(today)}
-        className="w-full flex items-center gap-2 text-sm px-2 py-1.5 rounded border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-      >
-        <Plus size={14} /> Open today’s note
-      </button>
-
       {groups.map((g) => (
         <div key={g.label} className="space-y-0.5">
           <div className="px-2 pt-1 text-[10px] uppercase tracking-wide text-neutral-400">

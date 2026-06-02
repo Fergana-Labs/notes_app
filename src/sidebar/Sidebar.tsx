@@ -9,6 +9,7 @@ import {
 import { TagsPane } from "./TagsPane";
 import { DailyNotesList } from "./DailyNotesList";
 import { SearchResultsPane } from "./SearchResultsPane";
+import { todayStr } from "../lib/daily";
 import { useDragRegion } from "../hooks/useDragRegion";
 import { useUISettings } from "../stores/uiSettings";
 
@@ -102,7 +103,12 @@ export function Sidebar({
               return (
                 <button
                   key={t.id}
-                  onClick={() => void setSidebarView(t.id)}
+                  onClick={() => {
+                    void setSidebarView(t.id);
+                    // Hitting the calendar jumps straight to today's note,
+                    // rather than just showing the list.
+                    if (t.id === "daily") onSelectDaily(todayStr());
+                  }}
                   title={t.label}
                   className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs ${
                     active
