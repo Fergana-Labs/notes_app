@@ -41,6 +41,21 @@ function sliceToMarkdown(editor: any, slice: Slice): string {
 }
 
 /**
+ * The slice + text/plain payload we last wrote on copy/cut, tagged with the
+ * originating editor. On paste, if the clipboard's text/plain still matches
+ * this verbatim AND it came from the same editor, we reuse the slice directly
+ * instead of round-tripping through markdown — so pasting back into the same
+ * note preserves bullets, list nesting, and empty lines exactly. This mirrors
+ * ProseMirror's own internal copy/paste dedupe (it compares the serialized
+ * clipboard against a cached slice); we key on text/plain because we suppress
+ * text/html. Any external paste — or a paste into a different editor instance,
+ * whose schema may differ — misses the cache and falls through to the proven
+ * markdown paste pipeline below.
+ */
+let lastCopied: { editor: unknown; text: string; slice: Slice } | null = null;
+const normalizeEol = (s: string) => s.replace(/\r\n/g, "\n");
+
+/**
  * Clipboard behavior for the note editors.
  *
  * Copy / cut: write our tight markdown to `text/plain` AND suppress
@@ -65,10 +80,15 @@ export const ClipboardSerialize = Extension.create({
     const writeClipboard = (view: EditorView, event: ClipboardEvent, isCut: boolean) => {
       const { state } = view;
       if (state.selection.empty || !event.clipboardData) return false;
-      const md = sliceToMarkdown(editor, state.selection.content());
+      const slice = state.selection.content();
+      const md = sliceToMarkdown(editor, slice);
       event.preventDefault();
       event.clipboardData.setData("text/plain", md);
       // Intentionally NO text/html — see the doc comment above.
+      // Remember the exact slice so a paste back into this same editor can
+      // reuse it verbatim instead of re-parsing the tight markdown (which
+      // merges adjacent paragraphs and drops empty lines).
+      lastCopied = { editor, text: normalizeEol(md), slice };
       if (isCut) {
         view.dispatch(state.tr.deleteSelection().scrollIntoView());
       }
@@ -95,6 +115,20 @@ export const ClipboardSerialize = Extension.create({
               const blanks = Math.max(0, newlines - 1);
               return "\n\n" + `${NBSP}\n\n`.repeat(blanks);
             });
+          },
+          // Paste back into the same editor: if the clipboard still holds
+          // exactly what we copied from here, replace the selection with the
+          // cached slice so structure (bullets, nesting, blank lines) survives
+          // intact. Otherwise return false to let the markdown paste run.
+          handlePaste: (view, event) => {
+            const cd = (event as ClipboardEvent).clipboardData;
+            if (!cd || !lastCopied || lastCopied.editor !== editor) return false;
+            const incoming = normalizeEol(cd.getData("text/plain"));
+            if (!incoming || incoming !== lastCopied.text) return false;
+            const { state } = view;
+            view.dispatch(state.tr.replaceSelection(lastCopied.slice).scrollIntoView());
+            event.preventDefault();
+            return true;
           },
           handleDOMEvents: {
             copy: (view, event) => writeClipboard(view, event as ClipboardEvent, false),
