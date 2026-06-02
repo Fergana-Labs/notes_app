@@ -16,6 +16,8 @@ interface Props {
   onDateRangeChange: (r: DateRange) => void;
   /** Used cosmetically for the placeholder. */
   tagFilter?: string | null;
+  /** Which space search targets — drives the placeholder text. */
+  scope?: "daily" | "notes";
 }
 
 /**
@@ -31,8 +33,15 @@ export function TopBarSearch({
   dateRange,
   onDateRangeChange,
   tagFilter,
+  scope = "notes",
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const placeholder =
+    scope === "daily"
+      ? "Search daily notes…"
+      : tagFilter
+        ? `Search #${tagFilter}…`
+        : "Search notes…";
 
   useEffect(() => {
     const focusInput = () => {
@@ -64,7 +73,7 @@ export function TopBarSearch({
               inputRef.current?.blur();
             }
           }}
-          placeholder={tagFilter ? `Search #${tagFilter}…` : "Search blocks…"}
+          placeholder={placeholder}
           className="w-full pl-8 pr-7 py-1.5 text-sm rounded-md border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 focus:border-neutral-400 dark:focus:border-neutral-600 outline-none transition-colors"
         />
         {value && (

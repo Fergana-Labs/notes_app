@@ -256,6 +256,7 @@ export default function App() {
             dateRange={dateRange}
             onDateRangeChange={setDateRange}
             tagFilter={tagFilter}
+            scope={sidebarView === "daily" ? "daily" : "notes"}
           />
         </header>
         <div className="flex-1 flex flex-col overflow-hidden">
