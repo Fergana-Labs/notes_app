@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownIt from "markdown-it";
-import { Brain, Send, Sparkles, PencilLine } from "lucide-react";
+import { Brain, Send, Sparkles, PencilLine, Volume2, VolumeX } from "lucide-react";
 import { useCoach } from "../stores/coach";
-import { streamMessage, type ToolActivity } from "./coachApi";
+import { streamMessage, synthesizeSpeech, type ToolActivity } from "./coachApi";
 import { ipc, type CoachMessageRow } from "../lib/ipc";
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
@@ -56,8 +56,17 @@ export function CoachView() {
   const [streaming, setStreaming] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolActivity[]>([]);
   const [busy, setBusy] = useState(false);
+  const [speak, setSpeak] = useState(false);
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopSpeaking = () => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+  };
+  // Stop any playback when leaving the screen.
+  useEffect(() => () => stopSpeaking(), []);
 
   // Latest-value refs so the poll interval can read state without re-subscribing.
   const busyRef = useRef(false);
@@ -107,6 +116,7 @@ export function CoachView() {
     setInput("");
     setBusy(true);
     setError("");
+    stopSpeaking();
     // Optimistic user bubble (replaced by the canonical synced message after).
     setMessages((m) => [
       ...m,
@@ -128,7 +138,7 @@ export function CoachView() {
         config,
         activeId,
         text,
-        { deep },
+        { deep, voice: speak },
         {
           onDelta: (d) => {
             acc += d;
@@ -162,6 +172,22 @@ export function CoachView() {
         ]);
       }
       void refresh(); // conversation title/order may have changed
+
+      // Speak the reply (relay TTS) when voice mode is on.
+      if (speak && result) {
+        try {
+          const blob = await synthesizeSpeech(config, result.reply || acc);
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            audio.onended = () => URL.revokeObjectURL(url);
+            void audio.play().catch(() => {});
+          }
+        } catch {
+          /* TTS is best-effort; ignore failures */
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -231,6 +257,22 @@ export function CoachView() {
           }`}
         >
           <Brain size={14} /> Think
+        </button>
+        <button
+          onClick={() => {
+            setSpeak((v) => {
+              if (v) stopSpeaking();
+              return !v;
+            });
+          }}
+          title={speak ? "Speaking replies aloud — tap to mute" : "Speak replies aloud"}
+          className={`flex items-center justify-center w-9 self-stretch rounded border ${
+            speak
+              ? "bg-neutral-900 text-white border-neutral-900 dark:bg-neutral-100 dark:text-neutral-900"
+              : "border-neutral-300 dark:border-neutral-700 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          }`}
+        >
+          {speak ? <Volume2 size={14} /> : <VolumeX size={14} />}
         </button>
         <textarea
           value={input}

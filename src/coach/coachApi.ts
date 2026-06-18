@@ -123,11 +123,23 @@ export interface StreamHandlers {
  * Send a message and stream the reply over SSE (POST + ReadableStream). Parses
  * the `event:`/`data:` frames the relay's /coach/stream endpoint emits.
  */
+/** Synthesize speech for a reply on the relay. Returns null if TTS isn't configured (501). */
+export async function synthesizeSpeech(cfg: CoachConfig, text: string): Promise<Blob | null> {
+  const res = await fetch(`${cfg.url}/coach/tts`, {
+    method: "POST",
+    headers: authHeaders(cfg.token),
+    body: JSON.stringify({ text }),
+  });
+  if (res.status === 501) return null; // relay has no TTS provider configured
+  if (!res.ok) throw new Error(`tts failed: ${res.status}`);
+  return await res.blob();
+}
+
 export async function streamMessage(
   cfg: CoachConfig,
   conversationId: string,
   text: string,
-  opts: { deep?: boolean },
+  opts: { deep?: boolean; voice?: boolean },
   handlers: StreamHandlers,
 ): Promise<void> {
   let res: Response;
@@ -137,7 +149,12 @@ export async function streamMessage(
     res = await fetchWithRetry(`${cfg.url}/coach/stream`, {
       method: "POST",
       headers: authHeaders(cfg.token),
-      body: JSON.stringify({ text, deep: !!opts.deep, conversation_id: conversationId }),
+      body: JSON.stringify({
+        text,
+        deep: !!opts.deep,
+        voice: !!opts.voice,
+        conversation_id: conversationId,
+      }),
     });
   } catch (e) {
     handlers.onError(String(e));
