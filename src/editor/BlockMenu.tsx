@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Type as TypeIcon,
   SplitSquareVertical,
+  MessageSquare,
 } from "lucide-react";
 import { BLOCK_TYPES } from "./blockTypes";
 import type { Editor } from "@tiptap/core";
@@ -31,6 +32,7 @@ interface Props {
   onCopyId: () => void;
   onSplitIntoBlocks: () => void;
   onSplitAtCursor: () => void;
+  onSendToCoach: () => void;
 }
 
 export function BlockMenu({
@@ -50,6 +52,7 @@ export function BlockMenu({
   onCopyId,
   onSplitIntoBlocks,
   onSplitAtCursor,
+  onSendToCoach,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const turnIntoRef = useRef<HTMLDivElement>(null);
@@ -204,6 +207,7 @@ export function BlockMenu({
       <Item icon={<ClipboardCopy size={14} />} label="Copy as markdown" onClick={() => { onCopyMarkdown(); onClose(); }} />
       <Item icon={<ClipboardCopy size={14} />} label="Copy block ID" onClick={() => { onCopyId(); onClose(); }} />
       <Item icon={<History size={14} />} label="History" onClick={() => { onShowHistory(); onClose(); }} />
+      <Item icon={<MessageSquare size={14} />} label="Send to coach" onClick={() => { onSendToCoach(); onClose(); }} />
       {!isFirst && (
         <Item
           icon={<ArrowUpToLine size={14} />}

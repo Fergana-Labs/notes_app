@@ -54,6 +54,8 @@ pub struct CoachConversationPayload {
     pub id: String,
     pub title: String,
     pub is_default: bool,
+    #[serde(default)]
+    pub system_prompt_note_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

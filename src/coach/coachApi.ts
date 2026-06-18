@@ -19,6 +19,8 @@ export interface CoachConversation {
   id: string;
   title: string;
   is_default: boolean;
+  /** Block id of the note used as this conversation's persona, or null. */
+  system_prompt_note_id?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -73,14 +75,62 @@ export async function fetchWithRetry(
 export async function listConversations(
   cfg: CoachConfig,
   onWaking?: () => void,
-): Promise<CoachConversation[]> {
+): Promise<{ conversations: CoachConversation[]; defaultSystemPromptNoteId: string | null }> {
   const res = await fetchWithRetry(
     `${cfg.url}/coach/conversations`,
     { headers: { Authorization: `Bearer ${cfg.token}` } },
     onWaking,
   );
   if (!res.ok) throw new Error(`conversations failed: ${res.status}`);
-  return ((await res.json()) as { conversations: CoachConversation[] }).conversations;
+  const data = (await res.json()) as {
+    conversations: CoachConversation[];
+    default_system_prompt_note_id?: string | null;
+  };
+  return {
+    conversations: data.conversations,
+    defaultSystemPromptNoteId: data.default_system_prompt_note_id ?? null,
+  };
+}
+
+/** Edit a conversation's title and/or its persona (system-prompt note). */
+export async function updateConversation(
+  cfg: CoachConfig,
+  id: string,
+  patch: { title?: string; systemPromptNoteId?: string | null },
+): Promise<CoachConversation> {
+  const body: Record<string, unknown> = {};
+  if (patch.title !== undefined) body.title = patch.title;
+  if (patch.systemPromptNoteId !== undefined)
+    body.system_prompt_note_id = patch.systemPromptNoteId;
+  const res = await fetchWithRetry(`${cfg.url}/coach/conversations/${id}`, {
+    method: "PATCH",
+    headers: authHeaders(cfg.token),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`update conversation failed: ${res.status}`);
+  return ((await res.json()) as { conversation: CoachConversation }).conversation;
+}
+
+/** Delete a conversation. The relay guarantees a default always remains. */
+export async function deleteConversation(cfg: CoachConfig, id: string): Promise<void> {
+  const res = await fetchWithRetry(`${cfg.url}/coach/conversations/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${cfg.token}` },
+  });
+  if (!res.ok) throw new Error(`delete conversation failed: ${res.status}`);
+}
+
+/** Set the workspace default persona (system-prompt note) for new conversations. */
+export async function setDefaultSystemPrompt(
+  cfg: CoachConfig,
+  noteId: string | null,
+): Promise<void> {
+  const res = await fetchWithRetry(`${cfg.url}/coach/default-system-prompt`, {
+    method: "PUT",
+    headers: authHeaders(cfg.token),
+    body: JSON.stringify({ note_id: noteId }),
+  });
+  if (!res.ok) throw new Error(`set default prompt failed: ${res.status}`);
 }
 
 export async function createConversation(

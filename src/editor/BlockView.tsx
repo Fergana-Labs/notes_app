@@ -7,6 +7,8 @@ import { BlockMenu } from "./BlockMenu";
 import { BLOCK_TYPES } from "./blockTypes";
 import { ipc, type StoredBlock } from "../lib/ipc";
 import { useWorkspace } from "../stores/workspace";
+import { useCoach } from "../stores/coach";
+import { useUISettings } from "../stores/uiSettings";
 import { splitMochiBlockAtSelection } from "./extensions/splitBlock";
 
 function runSplit(editor: any, state: any, _blockPos: number, _node: any) {
@@ -213,6 +215,24 @@ function BlockViewInner(props: NodeViewProps) {
       runSplit(editor, state, blockPos, node);
       editor.commands.focus();
     },
+    sendToCoach: () => {
+      // Serialize the block's content to plain text/markdown, seed the coach
+      // input with it, and switch the sidebar to the Coach view.
+      let text = node.textContent;
+      const serializer = (editor.storage as any).markdown?.serializer;
+      if (serializer && node.childCount > 0) {
+        try {
+          const parts: string[] = [];
+          node.content.forEach((child) => parts.push(serializer.serialize(child)));
+          text = parts.join("\n\n");
+        } catch {
+          // fall back to textContent
+        }
+      }
+      if (!text.trim()) return;
+      useCoach.getState().seedInput(text);
+      void useUISettings.getState().setSidebarView("coach");
+    },
     turnInto: (typeId: string) => {
       const pos = getPos?.();
       if (typeof pos !== "number") return;
@@ -339,6 +359,7 @@ function BlockViewInner(props: NodeViewProps) {
           }}
           onCopyMarkdown={showMenuActions.copyMarkdown}
           onCopyId={showMenuActions.copyId}
+          onSendToCoach={showMenuActions.sendToCoach}
         />
       )}
     </NodeViewWrapper>

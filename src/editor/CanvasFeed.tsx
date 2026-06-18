@@ -57,6 +57,7 @@ import { ulid } from "ulid";
 import type { Editor } from "@tiptap/core";
 import { useWorkspace } from "../stores/workspace";
 import { useUISettings } from "../stores/uiSettings";
+import { useCoach } from "../stores/coach";
 import { ipc, type BlockInput, type StoredBlock } from "../lib/ipc";
 import { debounce } from "../lib/debounce";
 import {
@@ -1942,6 +1943,12 @@ const FeedCard = memo(
               onSplitAtCursor={() => {
                 setMenuAnchor(null);
                 if (liveEditor) void onSplitAtCursor(liveEditor);
+              }}
+              onSendToCoach={() => {
+                setMenuAnchor(null);
+                if (!block.content.trim()) return;
+                useCoach.getState().seedInput(block.content);
+                void useUISettings.getState().setSidebarView("coach");
               }}
             />,
             document.body,

@@ -219,6 +219,9 @@ export interface CoachConversationRow {
   id: string;
   title: string;
   is_default: boolean;
+  /** Block id of the note used as this conversation's persona / system
+   *  prompt, or null. Synced from the relay. */
+  system_prompt_note_id: string | null;
   created_at: number;
   updated_at: number;
 }

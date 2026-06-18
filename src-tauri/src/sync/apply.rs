@@ -93,13 +93,18 @@ fn apply_data(tx: &Transaction, op: &Op) -> Result<()> {
         // Coach data authored by the relay — apply-only (never captured by
         // reconcile), so it just lands in the local mirror tables.
         "coach_conversation" => {
-            if let Ok(p) = serde_json::from_value::<CoachConversationPayload>(op.payload.clone()) {
+            if op.op == "delete" {
+                // Drop the conversation and its messages from the local mirror.
+                tx.execute("DELETE FROM coach_messages WHERE conversation_id = ?1", params![op.entity_key])?;
+                tx.execute("DELETE FROM coach_conversations WHERE id = ?1", params![op.entity_key])?;
+            } else if let Ok(p) = serde_json::from_value::<CoachConversationPayload>(op.payload.clone()) {
                 tx.execute(
-                    "INSERT INTO coach_conversations(id, title, is_default, created_at, updated_at)
-                     VALUES(?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO coach_conversations(id, title, is_default, system_prompt_note_id, created_at, updated_at)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(id) DO UPDATE SET
-                       title=excluded.title, is_default=excluded.is_default, updated_at=excluded.updated_at",
-                    params![p.id, p.title, p.is_default as i64, p.created_at, p.updated_at],
+                       title=excluded.title, is_default=excluded.is_default,
+                       system_prompt_note_id=excluded.system_prompt_note_id, updated_at=excluded.updated_at",
+                    params![p.id, p.title, p.is_default as i64, p.system_prompt_note_id, p.created_at, p.updated_at],
                 )?;
             }
         }

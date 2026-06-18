@@ -155,6 +155,7 @@ fn coach_ops_apply_to_local_mirror() {
 
     let convo = serde_json::json!({
         "id": "C1", "title": "Coach", "is_default": true,
+        "system_prompt_note_id": "NOTE1",
         "created_at": 1, "updated_at": 2
     });
     let m1 = serde_json::json!({
@@ -183,6 +184,7 @@ fn coach_ops_apply_to_local_mirror() {
     assert_eq!(convos.len(), 1);
     assert_eq!(convos[0].title, "Coach");
     assert!(convos[0].is_default);
+    assert_eq!(convos[0].system_prompt_note_id.as_deref(), Some("NOTE1"));
 
     let msgs = db::list_coach_messages(&b, "C1").unwrap();
     assert_eq!(msgs.len(), 2);
@@ -192,4 +194,19 @@ fn coach_ops_apply_to_local_mirror() {
     // Idempotent: re-applying the same op is a no-op (applied_ops + INSERT OR IGNORE).
     apply::apply_remote_op(&mut b, &mk("coach_message", "M2", m2, 3)).unwrap();
     assert_eq!(db::list_coach_messages(&b, "C1").unwrap().len(), 2);
+
+    // A delete op drops the conversation and its messages from the mirror.
+    let del = crate::sync::wire::Op {
+        op_id: "op-C1-delete".into(),
+        entity: "coach_conversation".into(),
+        entity_key: "C1".into(),
+        op: "delete".into(),
+        payload: serde_json::Value::Null,
+        hlc_wall: 20,
+        hlc_counter: 0,
+        origin: "srv-1".into(),
+    };
+    apply::apply_remote_op(&mut b, &del).unwrap();
+    assert_eq!(db::list_coach_conversations(&b).unwrap().len(), 0);
+    assert_eq!(db::list_coach_messages(&b, "C1").unwrap().len(), 0);
 }

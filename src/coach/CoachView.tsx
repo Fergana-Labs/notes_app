@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownIt from "markdown-it";
-import { Brain, Send, Sparkles, PencilLine, Volume2, VolumeX } from "lucide-react";
+import { ulid } from "ulid";
+import { Brain, Send, Sparkles, PencilLine, Volume2, VolumeX, FileDown, Check } from "lucide-react";
 import { useCoach } from "../stores/coach";
+import { useWorkspace } from "../stores/workspace";
 import { streamMessage, synthesizeSpeech, type ToolActivity } from "./coachApi";
 import { ipc, type CoachMessageRow } from "../lib/ipc";
 
@@ -49,9 +51,12 @@ export function CoachView() {
   const activeId = useCoach((s) => s.activeId);
   const conversations = useCoach((s) => s.conversations);
   const refresh = useCoach((s) => s.refresh);
+  const pendingInput = useCoach((s) => s.pendingInput);
+  const consumePendingInput = useCoach((s) => s.consumePendingInput);
 
   const [messages, setMessages] = useState<CoachMessageRow[]>([]);
   const [input, setInput] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deep, setDeep] = useState(false);
   const [streaming, setStreaming] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolActivity[]>([]);
@@ -79,6 +84,39 @@ export function CoachView() {
   }, [streaming]);
 
   const title = conversations.find((c) => c.id === activeId)?.title || "Coach";
+
+  // A note was sent into the coach (from a block's action menu): seed the input
+  // box so the user can review/edit before sending. Consumed once.
+  useEffect(() => {
+    if (pendingInput !== null) {
+      const text = consumePendingInput();
+      if (text) setInput((cur) => (cur.trim() ? `${cur}\n${text}` : text));
+    }
+  }, [pendingInput, consumePendingInput]);
+
+  // Copy a coach message into a new note (block) at the bottom of the feed.
+  const copyToNote = async (text: string, messageId: string) => {
+    const ws = useWorkspace.getState();
+    if (!ws.path) return;
+    const all = [...ws.blocks].sort((a, b) => a.position - b.position);
+    const last = all[all.length - 1];
+    try {
+      await ws.saveSnapshot([
+        {
+          id: ulid(),
+          content: text,
+          position: (last?.position ?? -1) + 1,
+          parent_id: last?.parent_id ?? null,
+          heading: null,
+          heading_level: null,
+        },
+      ]);
+      setCopiedId(messageId);
+      window.setTimeout(() => setCopiedId((c) => (c === messageId ? null : c)), 1500);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   // Load from the local replica, and poll so messages synced from other devices
   // (or the 3s background pull) show up. Skip polling mid-send.
@@ -223,11 +261,29 @@ export function CoachView() {
             key={m.id}
             className={
               m.role === "user"
-                ? "self-end max-w-[80%] rounded-2xl px-3 py-2 bg-blue-600 text-white whitespace-pre-wrap text-sm"
-                : "self-start max-w-[85%] rounded-2xl px-3 py-2 bg-neutral-100 dark:bg-neutral-800"
+                ? "self-end max-w-[80%] group/msg flex flex-col items-end"
+                : "self-start max-w-[85%] group/msg flex flex-col items-start"
             }
           >
-            {m.role === "coach" ? <Markdown text={m.text} /> : m.text}
+            <div
+              className={
+                m.role === "user"
+                  ? "rounded-2xl px-3 py-2 bg-blue-600 text-white whitespace-pre-wrap text-sm"
+                  : "rounded-2xl px-3 py-2 bg-neutral-100 dark:bg-neutral-800"
+              }
+            >
+              {m.role === "coach" ? <Markdown text={m.text} /> : m.text}
+            </div>
+            {m.role === "coach" && m.text.trim() && (
+              <button
+                onClick={() => void copyToNote(m.text, m.id)}
+                title="Save this reply as a note"
+                className="mt-1 flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 opacity-0 group-hover/msg:opacity-100 transition-opacity"
+              >
+                {copiedId === m.id ? <Check size={12} /> : <FileDown size={12} />}
+                {copiedId === m.id ? "Saved" : "Save to note"}
+              </button>
+            )}
           </div>
         ))}
         {streaming !== null && (

@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS coach_conversations (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
   is_default INTEGER NOT NULL DEFAULT 0,
+  system_prompt_note_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -156,6 +157,10 @@ pub fn open(workspace: &Path) -> Result<Connection> {
     // `priority` marks tags the user wants surfaced in the sidebar's
     // "Priority" view (vs the long tail under "All"). Idempotent.
     add_column_if_missing(&conn, "tags", "priority", "INTEGER NOT NULL DEFAULT 0")?;
+    // A coach conversation can pin a note (block) as its persona / system
+    // prompt. Synced from the relay; NULL until set. Idempotent for existing
+    // workspaces created before personas existed.
+    add_column_if_missing(&conn, "coach_conversations", "system_prompt_note_id", "TEXT")?;
     // One-shot copy of legacy `blocks.pinned = 1` rows into the
     // scoped `block_pins` table (with scope = '' meaning "global /
     // All view"). Gated by a settings flag so it only runs once per
@@ -1304,6 +1309,7 @@ pub struct CoachConversation {
     pub id: String,
     pub title: String,
     pub is_default: bool,
+    pub system_prompt_note_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -1321,7 +1327,7 @@ pub struct CoachMessage {
 /// Coach conversations from the local synced replica, newest-updated first.
 pub fn list_coach_conversations(conn: &Connection) -> Result<Vec<CoachConversation>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, is_default, created_at, updated_at
+        "SELECT id, title, is_default, system_prompt_note_id, created_at, updated_at
          FROM coach_conversations ORDER BY updated_at DESC",
     )?;
     let rows = stmt
@@ -1330,8 +1336,9 @@ pub fn list_coach_conversations(conn: &Connection) -> Result<Vec<CoachConversati
                 id: r.get(0)?,
                 title: r.get(1)?,
                 is_default: r.get::<_, i64>(2)? != 0,
-                created_at: r.get(3)?,
-                updated_at: r.get(4)?,
+                system_prompt_note_id: r.get(3)?,
+                created_at: r.get(4)?,
+                updated_at: r.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
