@@ -10,6 +10,9 @@ fn make_db() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
     conn.execute_batch(db::SCHEMA).unwrap();
+    // db::open() adds `deleted_at` via add_column_if_missing (not in SCHEMA);
+    // replicate it here since tests bypass open()'s file-backed path.
+    conn.execute("ALTER TABLE blocks ADD COLUMN deleted_at INTEGER", []).ok();
     crate::sync::apply_sync_schema(&conn).unwrap();
     conn
 }
