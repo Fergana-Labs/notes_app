@@ -66,7 +66,7 @@ pub struct Workspace {
     pub db: Connection,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AppState {
     inner: Arc<Mutex<Option<Workspace>>>,
 }
@@ -93,6 +93,9 @@ impl AppState {
         // per workspace-open. Cheap on a healthy DB; meaningful on a
         // stale one.
         let _ = db::prune_block_versions(&conn);
+
+        // Sync tables (additive) + device identity / clock seed.
+        crate::sync::apply_sync_schema(&conn)?;
 
         *self.inner.lock() = Some(Workspace { root, db: conn });
         Ok(())

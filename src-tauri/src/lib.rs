@@ -4,8 +4,10 @@ mod db;
 mod error;
 mod parser;
 mod state;
+mod sync;
 
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,6 +16,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::default())
+        .setup(|app| {
+            // Background sync: capture local/agent changes, push, pull + apply.
+            // Quietly no-ops until a workspace is open and paired.
+            let app_state = app.state::<AppState>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                let http = reqwest::Client::new();
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
+                loop {
+                    tick.tick().await;
+                    let _ = sync::client::sync_once(&app_state, &http).await;
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::switch_workspace,
@@ -48,6 +64,10 @@ pub fn run() {
             commands::should_backup,
             commands::export_canvas,
             commands::blocks_mtime,
+            sync::commands::sync_pair,
+            sync::commands::sync_status,
+            sync::commands::sync_unpair,
+            sync::commands::sync_tick,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

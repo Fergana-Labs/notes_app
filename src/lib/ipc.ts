@@ -192,4 +192,28 @@ export const ipc = {
   shouldBackup: () => invoke<boolean>("should_backup"),
   exportCanvas: () => invoke<string>("export_canvas"),
   blocksMtime: () => invoke<number>("blocks_mtime"),
+
+  // --- sync (relay) ---
+  syncPair: (relayUrl: string) => invoke<PairInfo>("sync_pair", { relayUrl }),
+  syncStatus: () => invoke<SyncStatus>("sync_status"),
+  syncUnpair: () => invoke<void>("sync_unpair"),
+  syncTick: () => invoke<SyncStats>("sync_tick"),
 };
+
+export interface PairInfo {
+  url: string;
+  workspace_id: string;
+  token: string;
+}
+export interface SyncStatus {
+  paired: boolean;
+  relay_url: string | null;
+  workspace_id: string | null;
+  token: string | null;
+  device_id: string | null;
+}
+export interface SyncStats {
+  pushed: number;
+  pulled: number;
+  applied: number;
+}

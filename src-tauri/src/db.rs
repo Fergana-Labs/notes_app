@@ -12,7 +12,7 @@ pub const SCHEMA_VERSION: i64 = 5;
 // in this file). The migration is responsible for moving rows from the
 // old shape into the new tables and dropping the legacy columns —
 // CREATE IF NOT EXISTS here is only the path for brand-new workspaces.
-const SCHEMA: &str = r#"
+pub(crate) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS blocks (
   id TEXT PRIMARY KEY,
   parent_id TEXT,
@@ -399,7 +399,7 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<TagCount>> {
 /// Upsert a tag row by name. Returns the tag's primary key. Used when
 /// new content introduces a tag name we haven't seen before. Created
 /// rows have empty description / NULL sort_order / NULL folder.
-fn upsert_tag(tx: &rusqlite::Transaction, name: &str, now: i64) -> Result<i64> {
+pub(crate) fn upsert_tag(tx: &rusqlite::Transaction, name: &str, now: i64) -> Result<i64> {
     tx.execute(
         "INSERT INTO tags(name, description, sort_order, folder, created_at, updated_at)
          VALUES(?1, '', NULL, NULL, ?2, ?2)
@@ -551,7 +551,7 @@ pub fn delete_tag(
 
 /// Rebuild `blocks_fts` for one block from the current `blocks` +
 /// joined tag names. Caller is responsible for surrounding transaction.
-fn refresh_fts_row(tx: &rusqlite::Transaction, block_id: &str) -> Result<()> {
+pub(crate) fn refresh_fts_row(tx: &rusqlite::Transaction, block_id: &str) -> Result<()> {
     let row: Option<(String, Option<String>)> = tx
         .query_row(
             "SELECT content, heading FROM blocks WHERE id = ?1",
