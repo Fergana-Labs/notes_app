@@ -204,7 +204,28 @@ export const ipc = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncUnpair: () => invoke<void>("sync_unpair"),
   syncTick: () => invoke<SyncStats>("sync_tick"),
+
+  // --- coach (read from the local synced replica) ---
+  coachListConversations: () => invoke<CoachConversationRow[]>("coach_list_conversations"),
+  coachListMessages: (conversationId: string) =>
+    invoke<CoachMessageRow[]>("coach_list_messages", { conversationId }),
 };
+
+export interface CoachConversationRow {
+  id: string;
+  title: string;
+  is_default: boolean;
+  created_at: number;
+  updated_at: number;
+}
+export interface CoachMessageRow {
+  id: string;
+  conversation_id: string;
+  role: "user" | "coach";
+  text: string;
+  audio_clip_id: string | null;
+  created_at: number;
+}
 
 export interface PairInfo {
   url: string;

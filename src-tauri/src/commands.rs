@@ -1,7 +1,7 @@
 use crate::config;
 use crate::db::{
-    self, BackupInfo, BlockInput, BlockVersion, DailyNoteMeta, SavedBlock, SearchHit, StoredBlock,
-    TagCount,
+    self, BackupInfo, BlockInput, BlockVersion, CoachConversation, CoachMessage, DailyNoteMeta,
+    SavedBlock, SearchHit, StoredBlock, TagCount,
 };
 use crate::error::{AppError, Result};
 use crate::state::AppState;
@@ -142,6 +142,21 @@ pub fn list_tags(state: State<'_, AppState>) -> Result<Vec<TagCount>> {
 
 /// Remove a single tag from one block (e.g. dismissing an AI suggestion) and
 /// return the refreshed block list. The tag stays in the global tag list.
+/// Coach conversations from the local synced replica (authored by the relay).
+#[tauri::command]
+pub fn coach_list_conversations(state: State<'_, AppState>) -> Result<Vec<CoachConversation>> {
+    state.with(|ws| db::list_coach_conversations(&ws.db))
+}
+
+/// Messages for one coach conversation from the local synced replica.
+#[tauri::command]
+pub fn coach_list_messages(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<CoachMessage>> {
+    state.with(|ws| db::list_coach_messages(&ws.db, &conversation_id))
+}
+
 #[tauri::command]
 pub fn remove_tag_from_block(
     block_id: String,

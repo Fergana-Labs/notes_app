@@ -44,6 +44,8 @@ pub fn run() {
             commands::set_tag_folder,
             commands::delete_tag,
             commands::remove_tag_from_block,
+            commands::coach_list_conversations,
+            commands::coach_list_messages,
             commands::search,
             commands::save_blocks,
             commands::list_versions,

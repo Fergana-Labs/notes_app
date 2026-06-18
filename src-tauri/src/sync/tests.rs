@@ -148,3 +148,48 @@ fn edit(id: &str, content: &str) -> db::BlockInput {
         title: None,
     }
 }
+
+#[test]
+fn coach_ops_apply_to_local_mirror() {
+    let mut b = make_db();
+
+    let convo = serde_json::json!({
+        "id": "C1", "title": "Coach", "is_default": true,
+        "created_at": 1, "updated_at": 2
+    });
+    let m1 = serde_json::json!({
+        "id": "M1", "conversation_id": "C1", "role": "user",
+        "text": "hi", "audio_clip_id": null, "created_at": 10
+    });
+    let m2 = serde_json::json!({
+        "id": "M2", "conversation_id": "C1", "role": "coach",
+        "text": "hello", "audio_clip_id": null, "created_at": 11
+    });
+    let mk = |entity: &str, key: &str, payload: serde_json::Value, c: i64| crate::sync::wire::Op {
+        op_id: format!("op-{key}-{c}"),
+        entity: entity.into(),
+        entity_key: key.into(),
+        op: "upsert".into(),
+        payload,
+        hlc_wall: c,
+        hlc_counter: 0,
+        origin: "srv-1".into(),
+    };
+    apply::apply_remote_op(&mut b, &mk("coach_conversation", "C1", convo, 1)).unwrap();
+    apply::apply_remote_op(&mut b, &mk("coach_message", "M1", m1, 2)).unwrap();
+    apply::apply_remote_op(&mut b, &mk("coach_message", "M2", m2.clone(), 3)).unwrap();
+
+    let convos = db::list_coach_conversations(&b).unwrap();
+    assert_eq!(convos.len(), 1);
+    assert_eq!(convos[0].title, "Coach");
+    assert!(convos[0].is_default);
+
+    let msgs = db::list_coach_messages(&b, "C1").unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].text, "hi");
+    assert_eq!(msgs[1].role, "coach");
+
+    // Idempotent: re-applying the same op is a no-op (applied_ops + INSERT OR IGNORE).
+    apply::apply_remote_op(&mut b, &mk("coach_message", "M2", m2, 3)).unwrap();
+    assert_eq!(db::list_coach_messages(&b, "C1").unwrap().len(), 2);
+}

@@ -8,7 +8,9 @@ use crate::db;
 use crate::error::Result;
 use crate::sync::hlc::{compare, tick_remote, Hlc};
 use crate::sync::reconcile::{refresh_block_shadow, set_shadow};
-use crate::sync::wire::{BlockPayload, DailyNotePayload, Op, TagPayload};
+use crate::sync::wire::{
+    BlockPayload, CoachConversationPayload, CoachMessagePayload, DailyNotePayload, Op, TagPayload,
+};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::HashSet;
 
@@ -86,6 +88,29 @@ fn apply_data(tx: &Transaction, op: &Op) -> Result<()> {
         "daily_note" => {
             if let Ok(p) = serde_json::from_value::<DailyNotePayload>(op.payload.clone()) {
                 apply_daily_upsert(tx, &p)?;
+            }
+        }
+        // Coach data authored by the relay — apply-only (never captured by
+        // reconcile), so it just lands in the local mirror tables.
+        "coach_conversation" => {
+            if let Ok(p) = serde_json::from_value::<CoachConversationPayload>(op.payload.clone()) {
+                tx.execute(
+                    "INSERT INTO coach_conversations(id, title, is_default, created_at, updated_at)
+                     VALUES(?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(id) DO UPDATE SET
+                       title=excluded.title, is_default=excluded.is_default, updated_at=excluded.updated_at",
+                    params![p.id, p.title, p.is_default as i64, p.created_at, p.updated_at],
+                )?;
+            }
+        }
+        "coach_message" => {
+            if let Ok(p) = serde_json::from_value::<CoachMessagePayload>(op.payload.clone()) {
+                // Append-only; ignore a duplicate id (idempotent re-apply).
+                tx.execute(
+                    "INSERT OR IGNORE INTO coach_messages(id, conversation_id, role, text, audio_clip_id, created_at)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![p.id, p.conversation_id, p.role, p.text, p.audio_clip_id, p.created_at],
+                )?;
             }
         }
         _ => {}

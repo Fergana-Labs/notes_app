@@ -107,6 +107,27 @@ CREATE TABLE IF NOT EXISTS daily_notes (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Coach threads + messages. These are authored by the relay (the agent host)
+-- and arrive as synced ops like blocks — apply-only on the device (never
+-- captured by reconcile). Lets the desktop read coach history from its local
+-- synced replica instead of round-tripping to the relay.
+CREATE TABLE IF NOT EXISTS coach_conversations (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS coach_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  text TEXT NOT NULL,
+  audio_clip_id TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coach_msgs_convo ON coach_messages(conversation_id, created_at);
 "#;
 
 pub fn open(workspace: &Path) -> Result<Connection> {
@@ -1276,6 +1297,66 @@ pub fn heal_strip_inline_tags(conn: &mut Connection) -> Result<()> {
 
     tx.commit()?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CoachConversation {
+    pub id: String,
+    pub title: String,
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CoachMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub role: String,
+    pub text: String,
+    pub audio_clip_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// Coach conversations from the local synced replica, newest-updated first.
+pub fn list_coach_conversations(conn: &Connection) -> Result<Vec<CoachConversation>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, is_default, created_at, updated_at
+         FROM coach_conversations ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CoachConversation {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                is_default: r.get::<_, i64>(2)? != 0,
+                created_at: r.get(3)?,
+                updated_at: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Messages in a conversation from the local synced replica, chronological.
+pub fn list_coach_messages(conn: &Connection, conversation_id: &str) -> Result<Vec<CoachMessage>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, conversation_id, role, text, audio_clip_id, created_at
+         FROM coach_messages WHERE conversation_id = ?1 ORDER BY created_at, rowid",
+    )?;
+    let rows = stmt
+        .query_map(params![conversation_id], |r| {
+            Ok(CoachMessage {
+                id: r.get(0)?,
+                conversation_id: r.get(1)?,
+                role: r.get(2)?,
+                text: r.get(3)?,
+                audio_clip_id: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 pub fn list_versions(conn: &Connection, block_id: &str) -> Result<Vec<BlockVersion>> {

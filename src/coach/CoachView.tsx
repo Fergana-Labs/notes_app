@@ -2,7 +2,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import MarkdownIt from "markdown-it";
 import { Brain, Send, Sparkles, PencilLine } from "lucide-react";
 import { useCoach } from "../stores/coach";
-import { fetchMessages, streamMessage, type CoachMessage, type ToolActivity } from "./coachApi";
+import { streamMessage, type ToolActivity } from "./coachApi";
+import { ipc, type CoachMessageRow } from "../lib/ipc";
+
+const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
+
+const MD_CLASS =
+  "text-sm leading-relaxed [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 " +
+  "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1 " +
+  "[&_li]:my-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:bg-black/10 dark:[&_pre]:bg-white/10 " +
+  "[&_pre]:p-2 [&_pre]:rounded [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_a]:underline " +
+  "[&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_blockquote]:border-l-2 " +
+  "[&_blockquote]:border-neutral-300 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-500";
+
+function Markdown({ text }: { text: string }) {
+  const html = useMemo(() => md.render(text), [text]);
+  return <div className={MD_CLASS} dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 const WRITE_TOOLS = new Set(["add_note", "update_note"]);
 
@@ -22,25 +38,11 @@ function ToolChip({ tool }: { tool: ToolActivity }) {
   );
 }
 
-const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
-
-const MD_CLASS =
-  "text-sm leading-relaxed [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 " +
-  "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1 " +
-  "[&_li]:my-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:bg-black/10 dark:[&_pre]:bg-white/10 " +
-  "[&_pre]:p-2 [&_pre]:rounded [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_a]:underline " +
-  "[&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_blockquote]:border-l-2 " +
-  "[&_blockquote]:border-neutral-300 [&_blockquote]:pl-3 [&_blockquote]:text-neutral-500";
-
-function Markdown({ text }: { text: string }) {
-  const html = useMemo(() => md.render(text), [text]);
-  return <div className={MD_CLASS} dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
 /**
- * Coach chat for the main panel — a thin UI over the relay's shared agent. It
- * renders the active conversation, streams the reply token-by-token, and renders
- * markdown. "Think" toggles the deeper (Opus) mode. No LLM runs here.
+ * Coach chat for the main panel. Reads the active conversation's messages from
+ * the LOCAL synced replica (so history is offline-capable and the single source
+ * of truth is the op log), streams the reply token-by-token over SSE for live
+ * UX, then reconciles against the synced messages once the relay's ops land.
  */
 export function CoachView() {
   const config = useCoach((s) => s.config);
@@ -48,7 +50,7 @@ export function CoachView() {
   const conversations = useCoach((s) => s.conversations);
   const refresh = useCoach((s) => s.refresh);
 
-  const [messages, setMessages] = useState<CoachMessage[]>([]);
+  const [messages, setMessages] = useState<CoachMessageRow[]>([]);
   const [input, setInput] = useState("");
   const [deep, setDeep] = useState(false);
   const [streaming, setStreaming] = useState<string | null>(null);
@@ -57,23 +59,42 @@ export function CoachView() {
   const [error, setError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Latest-value refs so the poll interval can read state without re-subscribing.
+  const busyRef = useRef(false);
+  const streamingRef = useRef<string | null>(null);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+  useEffect(() => {
+    streamingRef.current = streaming;
+  }, [streaming]);
+
   const title = conversations.find((c) => c.id === activeId)?.title || "Coach";
 
-  // Load the active conversation's history when it changes.
+  // Load from the local replica, and poll so messages synced from other devices
+  // (or the 3s background pull) show up. Skip polling mid-send.
   useEffect(() => {
-    if (!config || !activeId) {
+    if (!activeId) {
       setMessages([]);
       return;
     }
     let cancelled = false;
-    setError("");
-    void fetchMessages(config, activeId)
-      .then((m) => !cancelled && setMessages(m))
-      .catch((e) => !cancelled && setError(String(e)));
+    const reload = () =>
+      ipc
+        .coachListMessages(activeId)
+        .then((m) => {
+          if (!cancelled) setMessages(m);
+        })
+        .catch(() => {});
+    void reload();
+    const id = window.setInterval(() => {
+      if (!busyRef.current && streamingRef.current === null) void reload();
+    }, 3000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [config, activeId]);
+  }, [activeId]);
 
   // Keep pinned to the bottom as content grows / streams.
   useEffect(() => {
@@ -86,13 +107,22 @@ export function CoachView() {
     setInput("");
     setBusy(true);
     setError("");
+    // Optimistic user bubble (replaced by the canonical synced message after).
     setMessages((m) => [
       ...m,
-      { id: `tmp-${Date.now()}`, role: "user", text, audio_clip_id: null, created_at: Date.now() },
+      {
+        id: `tmp-${Date.now()}`,
+        conversation_id: activeId,
+        role: "user",
+        text,
+        audio_clip_id: null,
+        created_at: Date.now(),
+      },
     ]);
     setStreaming("");
     setTools([]);
     let acc = "";
+    let done: { reply: string; message_id: string } | null = null;
     try {
       await streamMessage(
         config,
@@ -106,32 +136,37 @@ export function CoachView() {
           },
           onTool: (info) => setTools((t) => [...t, info]),
           onDone: (info) => {
-            setMessages((m) => [
-              ...m,
-              {
-                id: info.message_id,
-                role: "coach",
-                text: info.reply || acc,
-                audio_clip_id: null,
-                created_at: Date.now(),
-              },
-            ]);
-            setStreaming(null);
-            setTools([]);
+            done = info;
           },
-          onError: (detail) => {
-            setError(detail);
-            setStreaming(null);
-            setTools([]);
-          },
+          onError: (detail) => setError(detail),
         },
       );
-      // Title/ordering may have changed (first message auto-titles a thread).
-      void refresh();
+      // Pull the user + reply ops the relay just authored into the local replica.
+      await ipc.syncTick().catch(() => {});
+      const result = done as { reply: string; message_id: string } | null;
+      const local = await ipc.coachListMessages(activeId).catch(() => null);
+      if (local && result && local.some((m) => m.id === result.message_id)) {
+        setMessages(local); // canonical
+      } else if (result) {
+        // Sync hasn't landed yet — show the streamed reply; the poll reconciles.
+        setMessages((m) => [
+          ...m,
+          {
+            id: result.message_id,
+            conversation_id: activeId,
+            role: "coach",
+            text: result.reply || acc,
+            audio_clip_id: null,
+            created_at: Date.now(),
+          },
+        ]);
+      }
+      void refresh(); // conversation title/order may have changed
     } catch (e) {
       setError(String(e));
-      setStreaming(null);
     } finally {
+      setStreaming(null);
+      setTools([]);
       setBusy(false);
     }
   };

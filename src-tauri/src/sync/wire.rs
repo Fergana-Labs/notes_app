@@ -48,3 +48,22 @@ pub struct DailyNotePayload {
     pub content: String,
     pub updated_at: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoachConversationPayload {
+    pub id: String,
+    pub title: String,
+    pub is_default: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoachMessagePayload {
+    pub id: String,
+    pub conversation_id: String,
+    pub role: String,
+    pub text: String,
+    pub audio_clip_id: Option<String>,
+    pub created_at: i64,
+}

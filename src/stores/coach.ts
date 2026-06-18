@@ -1,20 +1,17 @@
 import { create } from "zustand";
-import {
-  coachConfig,
-  listConversations,
-  createConversation,
-  type CoachConfig,
-  type CoachConversation,
-} from "../coach/coachApi";
+import { ipc, type CoachConversationRow } from "../lib/ipc";
+import { coachConfig, listConversations, createConversation, type CoachConfig } from "../coach/coachApi";
 
 /**
- * Shared coach conversation state: the sidebar list and the main chat view both
- * read it, so selecting/creating a conversation in one updates the other.
- * `config` (relay url + token) comes from sync status; null means unpaired.
+ * Shared coach state. Conversations + messages live in the synced op log; the
+ * desktop reads them from its LOCAL replica (Tauri commands) so history is
+ * available offline and consistent with notes. The relay is still the agent
+ * host: we hit it to author a default conversation / create new ones / stream
+ * replies, then pull the authored ops into the local DB.
  */
 interface CoachState {
   config: CoachConfig | null;
-  conversations: CoachConversation[];
+  conversations: CoachConversationRow[];
   activeId: string | null;
   loaded: boolean;
   error: string | null;
@@ -38,11 +35,19 @@ export const useCoach = create<CoachState>((set, get) => ({
         set({ config: null, conversations: [], activeId: null, loaded: true, error: null });
         return;
       }
-      const conversations = await listConversations(config);
+      // Bootstrap: hitting the relay ensures a default conversation has been
+      // authored; the sync tick pulls it (and any peer activity) into the local
+      // replica. Best-effort — offline falls back to whatever's already local.
+      try {
+        await listConversations(config);
+        await ipc.syncTick();
+      } catch {
+        /* offline / relay waking — use the local replica */
+      }
+      const conversations = await ipc.coachListConversations();
       set((s) => ({
         config,
         conversations,
-        // Keep the current selection if still present; else pick the newest.
         activeId:
           s.activeId && conversations.some((c) => c.id === s.activeId)
             ? s.activeId
@@ -56,11 +61,8 @@ export const useCoach = create<CoachState>((set, get) => ({
   },
 
   refresh: async () => {
-    const { config } = get();
-    if (!config) return;
     try {
-      const conversations = await listConversations(config);
-      set({ conversations });
+      set({ conversations: await ipc.coachListConversations() });
     } catch (e) {
       set({ error: String(e) });
     }
@@ -72,8 +74,14 @@ export const useCoach = create<CoachState>((set, get) => ({
     const { config } = get();
     if (!config) return;
     try {
-      const convo = await createConversation(config, "");
-      set((s) => ({ conversations: [convo, ...s.conversations], activeId: convo.id }));
+      const convo = await createConversation(config, ""); // relay authors the op
+      await ipc.syncTick().catch(() => {});
+      const local = await ipc.coachListConversations();
+      // Show it immediately even if the sync pull hasn't landed yet.
+      const conversations = local.some((c) => c.id === convo.id)
+        ? local
+        : [{ ...convo }, ...local];
+      set({ conversations, activeId: convo.id });
     } catch (e) {
       set({ error: String(e) });
     }
