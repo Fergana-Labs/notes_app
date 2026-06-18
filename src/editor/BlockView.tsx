@@ -1,5 +1,6 @@
 import { NodeViewContent, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { GripVertical, Plus } from "lucide-react";
+import { AudioNoteButton } from "./AudioNoteButton";
 import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { TextSelection } from "@tiptap/pm/state";
 import { BlockMenu } from "./BlockMenu";
@@ -245,6 +246,7 @@ function BlockViewInner(props: NodeViewProps) {
         </div>
         <div className="flex items-center gap-1.5 min-w-0 flex-1 text-xs text-neutral-500">
           <span className="font-mono truncate">@{handle}</span>
+          {blockId && <AudioNoteButton blockId={blockId} />}
           {Array.isArray(node.attrs.tags) && node.attrs.tags.length > 0 && (
             <span className="flex items-center gap-1 flex-wrap">
               {(node.attrs.tags as string[]).slice(0, 4).map((t) => {

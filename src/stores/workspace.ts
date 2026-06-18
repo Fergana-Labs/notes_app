@@ -22,6 +22,8 @@ interface WorkspaceState {
   error: string | null;
   /** Last known mtime of blocks.db. Used by the agent-edit poller. */
   lastMtime: number;
+  /** Block ids that have a synced voice-note audio clip on the relay. */
+  audioIds: string[];
   /** Undo stack for tags-view structural actions. */
   undoStack: UndoEntry[];
 
@@ -70,6 +72,8 @@ async function refreshAfterOpen(set: any, blocks: StoredBlock[], path: string) {
   ipc.shouldBackup().then((should) => {
     if (should) ipc.createBackup().catch(console.error);
   });
+  // Discover which blocks have voice-note audio on the relay (best-effort).
+  ipc.audioNoteIds().then((audioIds) => set({ audioIds })).catch(() => {});
 }
 
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
@@ -79,6 +83,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   loading: false,
   error: null,
   lastMtime: 0,
+  audioIds: [],
   undoStack: [],
 
   bootstrap: async () => {
@@ -118,6 +123,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const blocks = await ipc.listBlocks();
     const tags = await ipc.listTags();
     set({ blocks, tags });
+    ipc.audioNoteIds().then((audioIds) => set({ audioIds })).catch(() => {});
   },
 
   saveSnapshot: async (input, deletedIds = []) => {

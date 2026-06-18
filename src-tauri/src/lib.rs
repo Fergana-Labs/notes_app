@@ -20,12 +20,21 @@ pub fn run() {
             // Background sync: capture local/agent changes, push, pull + apply.
             // Quietly no-ops until a workspace is open and paired.
             let app_state = app.state::<AppState>().inner().clone();
+            let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                use tauri::Emitter;
                 let http = reqwest::Client::new();
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
                 loop {
                     tick.tick().await;
-                    let _ = sync::client::sync_once(&app_state, &http).await;
+                    if let Ok(stats) = sync::client::sync_once(&app_state, &http).await {
+                        // Writes land in the WAL, so blocks.db's mtime doesn't move
+                        // and the mtime poller won't notice. Tell the frontend to
+                        // reload directly whenever a pull actually changed data.
+                        if stats.applied > 0 {
+                            let _ = app_handle.emit("sync-applied", stats.applied);
+                        }
+                    }
                 }
             });
             Ok(())
@@ -71,6 +80,8 @@ pub fn run() {
             sync::commands::sync_status,
             sync::commands::sync_unpair,
             sync::commands::sync_tick,
+            sync::commands::audio_note_ids,
+            sync::commands::audio_fetch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

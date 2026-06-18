@@ -205,6 +205,10 @@ export const ipc = {
   syncUnpair: () => invoke<void>("sync_unpair"),
   syncTick: () => invoke<SyncStats>("sync_tick"),
 
+  // --- voice-note audio (streamed from the relay; clip id == block id) ---
+  audioNoteIds: () => invoke<string[]>("audio_note_ids"),
+  audioFetch: (clipId: string) => invoke<number[]>("audio_fetch", { clipId }),
+
   // --- coach (read from the local synced replica) ---
   coachListConversations: () => invoke<CoachConversationRow[]>("coach_list_conversations"),
   coachListMessages: (conversationId: string) =>

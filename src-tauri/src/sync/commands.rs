@@ -72,3 +72,82 @@ pub async fn sync_tick(state: State<'_, AppState>) -> Result<SyncStats> {
     let http = reqwest::Client::new();
     client::sync_once(state.inner(), &http).await
 }
+
+// ---- Audio clips ---------------------------------------------------------
+// Voice-note audio isn't carried by the oplog — only the transcript block syncs.
+// The relay stores the m4a out-of-band, keyed by clip id (== block id for notes).
+// The desktop discovers which blocks have audio via the manifest and streams the
+// bytes on demand for playback. No schema/wire change needed.
+
+#[derive(serde::Deserialize)]
+struct ManifestClip {
+    clip_id: String,
+    kind: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestResp {
+    clips: Vec<ManifestClip>,
+    next_cursor: i64,
+    has_more: bool,
+}
+
+/// Block ids that have a synced voice-note audio clip on the relay.
+#[tauri::command]
+pub async fn audio_note_ids(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let Some(cfg) = client::load_config(state.inner())? else {
+        return Ok(vec![]);
+    };
+    let http = reqwest::Client::new();
+    let mut ids = Vec::new();
+    let mut since: i64 = 0;
+    loop {
+        let resp: ManifestResp = http
+            .get(format!("{}/audio/manifest?since={}", cfg.relay_url, since))
+            .bearer_auth(&cfg.token)
+            .send()
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("audio manifest: {e}")))?
+            .json()
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("audio manifest decode: {e}")))?;
+        for c in &resp.clips {
+            if c.kind == "note" {
+                ids.push(c.clip_id.clone());
+            }
+        }
+        if !resp.has_more || resp.next_cursor == since {
+            break;
+        }
+        since = resp.next_cursor;
+    }
+    Ok(ids)
+}
+
+/// Stream one clip's raw m4a bytes from the relay (the webview wraps them in a
+/// Blob to play). Clips are small; returning bytes over IPC keeps the token in
+/// Rust rather than handing it to the frontend.
+#[tauri::command]
+pub async fn audio_fetch(clip_id: String, state: State<'_, AppState>) -> Result<Vec<u8>> {
+    let Some(cfg) = client::load_config(state.inner())? else {
+        return Err(crate::error::AppError::Other("not paired".into()));
+    };
+    let http = reqwest::Client::new();
+    let res = http
+        .get(format!("{}/audio/{}", cfg.relay_url, clip_id))
+        .bearer_auth(&cfg.token)
+        .send()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("audio fetch: {e}")))?;
+    if !res.status().is_success() {
+        return Err(crate::error::AppError::Other(format!(
+            "audio fetch failed: {}",
+            res.status()
+        )));
+    }
+    let bytes = res
+        .bytes()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("audio body: {e}")))?;
+    Ok(bytes.to_vec())
+}

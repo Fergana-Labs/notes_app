@@ -13,6 +13,7 @@ import { useWorkspace } from "./stores/workspace";
 import { useUISettings } from "./stores/uiSettings";
 import { useDragRegion } from "./hooks/useDragRegion";
 import { ipc } from "./lib/ipc";
+import { listen } from "@tauri-apps/api/event";
 
 export default function App() {
   const path = useWorkspace((s) => s.path);
@@ -162,6 +163,19 @@ export default function App() {
     return () => {
       cancelled = true;
       window.clearInterval(id);
+    };
+  }, [path, reload]);
+
+  // Background sync writes through the WAL, so the mtime poller above can't see
+  // pulled-in changes. The Rust sync task emits `sync-applied` whenever a pull
+  // actually changed local data — reload the in-memory store on that signal.
+  useEffect(() => {
+    if (!path) return;
+    const unlisten = listen("sync-applied", () => {
+      void reload();
+    });
+    return () => {
+      void unlisten.then((off) => off());
     };
   }, [path, reload]);
 
