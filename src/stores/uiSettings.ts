@@ -25,13 +25,13 @@ interface UISettings {
   viewMode: ViewMode;
   /** Which sidebar list is showing: the daily-notes archive, the
    *  priority-tags shortlist, or all tags. */
-  sidebarView: "daily" | "priority" | "all";
+  sidebarView: "daily" | "priority" | "all" | "coach";
   loaded: boolean;
   load: () => Promise<void>;
   setColorful: (v: boolean) => Promise<void>;
   setCompact: (v: boolean) => Promise<void>;
   setViewMode: (v: ViewMode) => Promise<void>;
-  setSidebarView: (v: "daily" | "priority" | "all") => Promise<void>;
+  setSidebarView: (v: "daily" | "priority" | "all" | "coach") => Promise<void>;
 }
 
 export const useUISettings = create<UISettings>((set) => ({
@@ -56,8 +56,8 @@ export const useUISettings = create<UISettings>((set) => ({
     else if (hh === "true") viewMode = "note";
     // Prefer the new sidebar_view key; fall back to the legacy tag_scope
     // (priority/all) for workspaces saved before daily notes existed.
-    let sidebarView: "daily" | "priority" | "all" = "all";
-    if (sv === "daily" || sv === "priority" || sv === "all") sidebarView = sv;
+    let sidebarView: "daily" | "priority" | "all" | "coach" = "all";
+    if (sv === "daily" || sv === "priority" || sv === "all" || sv === "coach") sidebarView = sv;
     else if (ts === "priority") sidebarView = "priority";
     set({
       colorful: c === "true",

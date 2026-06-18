@@ -5,6 +5,7 @@ import { ChatBox } from "./editor/ChatBox";
 import { FindBar } from "./editor/FindBar";
 import { TrashPane } from "./editor/TrashPane";
 import { DailyNotePane } from "./editor/DailyNotePane";
+import { CoachView } from "./coach/CoachView";
 import { restoreLastFocus } from "./editor/activeEditor";
 import { SettingsModal } from "./settings/SettingsModal";
 import { TopBarSearch, type DateRange } from "./topbar/TopBarSearch";
@@ -267,6 +268,8 @@ export default function App() {
             </>
           ) : showTrash ? (
             <TrashPane onClose={() => setShowTrash(false)} />
+          ) : sidebarView === "coach" ? (
+            <CoachView />
           ) : (
             <>
               <CanvasFeed

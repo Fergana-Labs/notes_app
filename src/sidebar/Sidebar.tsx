@@ -5,9 +5,10 @@ import {
   CalendarDays,
   Star,
   Hash,
+  MessageSquare,
 } from "lucide-react";
 import { TagsPane } from "./TagsPane";
-import { CoachButton } from "../coach/CoachPanel";
+import { CoachConversationList } from "../coach/CoachConversationList";
 import { DailyNotesList } from "./DailyNotesList";
 import { SearchResultsPane } from "./SearchResultsPane";
 import { todayStr } from "../lib/daily";
@@ -72,6 +73,7 @@ export function Sidebar({
     { id: "daily", label: "Daily", icon: CalendarDays },
     { id: "priority", label: "Priority", icon: Star },
     { id: "all", label: "All tags", icon: Hash },
+    { id: "coach", label: "Coach", icon: MessageSquare },
   ] as const;
 
   return (
@@ -113,7 +115,9 @@ export function Sidebar({
         })}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {sidebarView === "daily" ? (
+        {sidebarView === "coach" ? (
+          <CoachConversationList />
+        ) : sidebarView === "daily" ? (
           // Daily space: search filters daily notes; otherwise the archive.
           <DailyNotesList
             selectedDate={dailyDate}
@@ -155,9 +159,6 @@ export function Sidebar({
         <SettingsIcon size={14} />
         <span>Settings</span>
       </button>
-      <div className="flex items-center gap-2 px-3 py-2 border-t border-neutral-200 dark:border-neutral-800">
-        <CoachButton />
-      </div>
     </aside>
   );
 }
