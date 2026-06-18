@@ -140,6 +140,20 @@ pub fn list_tags(state: State<'_, AppState>) -> Result<Vec<TagCount>> {
     state.with(|ws| db::list_tags(&ws.db))
 }
 
+/// Remove a single tag from one block (e.g. dismissing an AI suggestion) and
+/// return the refreshed block list. The tag stays in the global tag list.
+#[tauri::command]
+pub fn remove_tag_from_block(
+    block_id: String,
+    tag_name: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<StoredBlock>> {
+    state.with(|ws| {
+        db::remove_tag_from_block(&mut ws.db, &block_id, &tag_name)?;
+        db::list_blocks(&ws.db)
+    })
+}
+
 #[tauri::command]
 pub fn set_tag_description(
     name: String,

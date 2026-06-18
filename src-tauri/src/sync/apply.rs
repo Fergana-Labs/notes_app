@@ -119,6 +119,17 @@ fn apply_block_upsert(tx: &Transaction, p: &BlockPayload) -> Result<()> {
         )?;
     }
 
+    // Rewrite AI-tag provenance from the payload (which tags came from the AI tagger).
+    tx.execute("DELETE FROM block_ai_tags WHERE block_id = ?1", params![p.id])?;
+    if let Some(ai) = &p.ai_tags {
+        for name in ai {
+            tx.execute(
+                "INSERT OR IGNORE INTO block_ai_tags(block_id, name) VALUES(?1, ?2)",
+                params![p.id, name],
+            )?;
+        }
+    }
+
     // Rewrite pins.
     tx.execute("DELETE FROM block_pins WHERE block_id = ?1", params![p.id])?;
     let mut seen: HashSet<String> = HashSet::new();

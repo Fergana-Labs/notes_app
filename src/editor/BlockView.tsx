@@ -4,7 +4,8 @@ import { memo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { TextSelection } from "@tiptap/pm/state";
 import { BlockMenu } from "./BlockMenu";
 import { BLOCK_TYPES } from "./blockTypes";
-import type { StoredBlock } from "../lib/ipc";
+import { ipc, type StoredBlock } from "../lib/ipc";
+import { useWorkspace } from "../stores/workspace";
 import { splitMochiBlockAtSelection } from "./extensions/splitBlock";
 
 function runSplit(editor: any, state: any, _blockPos: number, _node: any) {
@@ -39,6 +40,19 @@ function countLeafTextblocks(node: any): number {
 function BlockViewInner(props: NodeViewProps) {
   const { node, editor, getPos } = props;
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
+
+  // AI-suggested tags (from the relay tagger) are shown distinctly and can be
+  // removed one at a time. Looked up from the synced store by block id.
+  const blockId = (node.attrs.id as string | null) ?? null;
+  const aiTags = useWorkspace(
+    (s) => (blockId ? (s.blocks.find((b) => b.id === blockId)?.ai_tags ?? []) : []),
+  );
+  const reload = useWorkspace((s) => s.reload);
+  const removeAiTag = async (tag: string) => {
+    if (!blockId) return;
+    await ipc.removeTagFromBlock(blockId, tag);
+    await reload();
+  };
 
   const inner = node.firstChild;
   const innerName = inner?.type.name;
@@ -96,6 +110,7 @@ function BlockViewInner(props: NodeViewProps) {
     content: "",
     content_hash: "",
     tags: Array.isArray(node.attrs.tags) ? node.attrs.tags : [],
+    ai_tags: aiTags,
     pinned_scopes: [],
     title: null,
     created_at: 0,
@@ -232,14 +247,36 @@ function BlockViewInner(props: NodeViewProps) {
           <span className="font-mono truncate">@{handle}</span>
           {Array.isArray(node.attrs.tags) && node.attrs.tags.length > 0 && (
             <span className="flex items-center gap-1 flex-wrap">
-              {(node.attrs.tags as string[]).slice(0, 4).map((t) => (
-                <span
-                  key={t}
-                  className="px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                >
-                  #{t}
-                </span>
-              ))}
+              {(node.attrs.tags as string[]).slice(0, 4).map((t) => {
+                const isAi = aiTags.includes(t);
+                return (
+                  <span
+                    key={t}
+                    className={
+                      isAi
+                        ? "px-1.5 py-0.5 rounded-full bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 inline-flex items-center gap-0.5"
+                        : "px-1.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                    }
+                    title={isAi ? "AI-suggested tag — click × to remove" : undefined}
+                  >
+                    {isAi ? "✨" : "#"}
+                    {t}
+                    {isAi && blockId && (
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          void removeAiTag(t);
+                        }}
+                        className="ml-0.5 opacity-60 hover:opacity-100"
+                        aria-label={`Remove AI tag ${t}`}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                );
+              })}
             </span>
           )}
         </div>

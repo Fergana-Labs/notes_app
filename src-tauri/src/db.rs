@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS block_pins (
 );
 CREATE INDEX IF NOT EXISTS idx_block_pins_scope ON block_pins(scope);
 
+-- AI-sourced tag provenance: which of a block's tags were suggested by the
+-- relay's AI tagger (carried on the synced block payload's `ai_tags`). Lets the
+-- UI mark them distinctly and remove them one at a time.
+CREATE TABLE IF NOT EXISTS block_ai_tags (
+  block_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  PRIMARY KEY (block_id, name),
+  FOREIGN KEY (block_id) REFERENCES blocks(id) ON DELETE CASCADE
+);
+
 -- One markdown scratchpad per calendar day. Persisted (never auto-
 -- destroyed) so the user can browse previous days. `date` is YYYY-MM-DD.
 CREATE TABLE IF NOT EXISTS daily_notes (
@@ -183,6 +193,9 @@ pub struct StoredBlock {
     pub content: String,
     pub content_hash: String,
     pub tags: Vec<String>,
+    /// Subset of `tags` that were suggested by the AI tagger (shown distinctly,
+    /// removable per-block). Projected from `block_ai_tags`.
+    pub ai_tags: Vec<String>,
     /// Scopes in which the block is pinned. Empty string means the
     /// global "All blocks" view; any other value is a tag name. A
     /// block may be pinned in multiple scopes simultaneously.
@@ -270,14 +283,46 @@ fn fetch_block_tags(conn: &Connection) -> Result<std::collections::HashMap<Strin
     Ok(out)
 }
 
+/// block_id → AI-sourced tag names (from `block_ai_tags`).
+fn fetch_block_ai_tags(conn: &Connection) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let mut stmt = conn.prepare("SELECT block_id, name FROM block_ai_tags")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (block_id, name) in rows {
+        out.entry(block_id).or_default().push(name);
+    }
+    Ok(out)
+}
+
+/// Remove a single tag from one block (e.g. dismissing an AI suggestion). The
+/// tag stays in the global tag list; only this block's edge is dropped.
+pub fn remove_tag_from_block(conn: &mut Connection, block_id: &str, tag_name: &str) -> Result<()> {
+    let lname = tag_name.to_lowercase();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM block_tags WHERE block_id = ?1 AND tag_id = (SELECT id FROM tags WHERE name = ?2)",
+        params![block_id, lname],
+    )?;
+    tx.execute(
+        "DELETE FROM block_ai_tags WHERE block_id = ?1 AND name = ?2",
+        params![block_id, lname],
+    )?;
+    refresh_fts_row(&tx, block_id)?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn list_blocks(conn: &Connection) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
     let pin_map = fetch_block_pin_scopes(conn)?;
+    let ai_map = fetch_block_ai_tags(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks WHERE deleted_at IS NULL ORDER BY position",
     )?;
     let rows = stmt
-        .query_map([], |row| row_to_block(row, &tag_map, &pin_map))?
+        .query_map([], |row| row_to_block(row, &tag_map, &pin_map, &ai_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -287,11 +332,12 @@ pub fn list_blocks(conn: &Connection) -> Result<Vec<StoredBlock>> {
 pub fn list_trash(conn: &Connection) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
     let pin_map = fetch_block_pin_scopes(conn)?;
+    let ai_map = fetch_block_ai_tags(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at FROM blocks WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
     )?;
     let rows = stmt
-        .query_map([], |row| row_to_block(row, &tag_map, &pin_map))?
+        .query_map([], |row| row_to_block(row, &tag_map, &pin_map, &ai_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -334,6 +380,7 @@ pub fn empty_trash(conn: &Connection) -> Result<usize> {
 pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBlock>> {
     let tag_map = fetch_block_tags(conn)?;
     let pin_map = fetch_block_pin_scopes(conn)?;
+    let ai_map = fetch_block_ai_tags(conn)?;
     let needle = tag.to_lowercase();
     let mut stmt = conn.prepare(
         "SELECT b.id, b.parent_id, b.position, b.heading, b.heading_level, b.content, b.content_hash, b.pinned, b.title, b.created_at, b.updated_at
@@ -344,7 +391,7 @@ pub fn list_blocks_by_tag(conn: &Connection, tag: &str) -> Result<Vec<StoredBloc
          ORDER BY b.position",
     )?;
     let rows = stmt
-        .query_map(params![needle], |row| row_to_block(row, &tag_map, &pin_map))?
+        .query_map(params![needle], |row| row_to_block(row, &tag_map, &pin_map, &ai_map))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -1399,11 +1446,17 @@ fn row_to_block(
     row: &rusqlite::Row,
     tag_map: &std::collections::HashMap<String, Vec<String>>,
     pin_map: &std::collections::HashMap<String, Vec<String>>,
+    ai_tag_map: &std::collections::HashMap<String, Vec<String>>,
 ) -> rusqlite::Result<StoredBlock> {
     let heading_level: Option<i64> = row.get(4)?;
     let legacy_pinned: i64 = row.get(7)?;
     let id: String = row.get(0)?;
     let tags = tag_map.get(&id).cloned().unwrap_or_default();
+    // Only surface AI tags that are still actual tags on the block.
+    let ai_tags: Vec<String> = ai_tag_map
+        .get(&id)
+        .map(|names| names.iter().filter(|n| tags.contains(n)).cloned().collect())
+        .unwrap_or_default();
     // Merge legacy `blocks.pinned = 1` (e.g. agent writes) with the
     // scoped block_pins set. Legacy pin counts as the global scope (
     // empty string). De-dupe via a BTreeSet so the result is sorted +
@@ -1427,6 +1480,7 @@ fn row_to_block(
         content: row.get(5)?,
         content_hash: row.get(6)?,
         tags,
+        ai_tags,
         pinned_scopes,
         title: row.get(8)?,
         created_at: row.get(9)?,

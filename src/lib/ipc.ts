@@ -12,6 +12,9 @@ export interface StoredBlock {
    *  from the normalized `tags` + `block_tags` tables; not stored on
    *  the block row itself. */
   tags: string[];
+  /** Subset of `tags` suggested by the AI tagger (shown distinctly,
+   *  removable per-block). */
+  ai_tags: string[];
   /** Scopes in which the block is pinned. Empty string means the
    *  global "All blocks" view; any other value is a tag name. */
   pinned_scopes: string[];
@@ -192,6 +195,9 @@ export const ipc = {
   shouldBackup: () => invoke<boolean>("should_backup"),
   exportCanvas: () => invoke<string>("export_canvas"),
   blocksMtime: () => invoke<number>("blocks_mtime"),
+
+  removeTagFromBlock: (blockId: string, tagName: string) =>
+    invoke<StoredBlock[]>("remove_tag_from_block", { blockId, tagName }),
 
   // --- sync (relay) ---
   syncPair: (relayUrl: string) => invoke<PairInfo>("sync_pair", { relayUrl }),

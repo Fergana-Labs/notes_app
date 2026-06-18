@@ -175,6 +175,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
           content: sv.content,
           content_hash: sv.content_hash,
           tags: sv.tags,
+          ai_tags: [],
           pinned_scopes: sv.pinned_scopes,
           title: sv.title,
           created_at: now,

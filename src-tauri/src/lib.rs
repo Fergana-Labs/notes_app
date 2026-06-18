@@ -43,6 +43,7 @@ pub fn run() {
             commands::set_tag_priority,
             commands::set_tag_folder,
             commands::delete_tag,
+            commands::remove_tag_from_block,
             commands::search,
             commands::save_blocks,
             commands::list_versions,

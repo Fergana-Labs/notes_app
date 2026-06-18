@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { TagsPane } from "./TagsPane";
 import { SyncButton } from "../sync/SyncPanel";
+import { CoachButton } from "../coach/CoachPanel";
 import { DailyNotesList } from "./DailyNotesList";
 import { SearchResultsPane } from "./SearchResultsPane";
 import { todayStr } from "../lib/daily";
@@ -155,8 +156,9 @@ export function Sidebar({
         <SettingsIcon size={14} />
         <span>Settings</span>
       </button>
-      <div className="px-3 py-2 border-t border-neutral-200 dark:border-neutral-800">
+      <div className="flex items-center gap-2 px-3 py-2 border-t border-neutral-200 dark:border-neutral-800">
         <SyncButton />
+        <CoachButton />
       </div>
     </aside>
   );
