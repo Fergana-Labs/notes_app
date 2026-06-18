@@ -4,10 +4,10 @@ This branch (`mochi-sync-coach`) turns Mochi from a purely local notebook into t
 **desktop half of a synced, AI-assisted system** shared with the mobile app
 (`../stash_app`). Three pieces landed here, plus a clipboard bug fix.
 
-> ⚠️ **The Rust was written but not compiled in the environment that produced
-> it** (no Rust toolchain there). Run `cargo build` / `cargo test` from
-> `src-tauri/` and expect to fix a few small things. The TypeScript frontend
-> typechecks clean (`npx tsc --noEmit`).
+> ✅ **QA'd:** `cargo build` and `cargo test` pass from `src-tauri/` (14/14),
+> and the TypeScript frontend typechecks + builds clean. A schema bug that hid
+> `blocks.deleted_at` from the sync engine (and a missing sync-schema reapply on
+> backup restore) were fixed during QA.
 
 ---
 
@@ -58,10 +58,10 @@ relay isn't echoed back as a local one. `save_snapshot` is left untouched.
 A background `tokio` task (spawned in `lib.rs`) runs a sync cycle every few
 seconds; it's a no-op until a workspace is open and paired.
 
-**Pairing UI:** sidebar → **Sync**. It shows `{ url, workspace_id, token }` —
-the exact JSON the phone's QR scanner reads. (A QR component, e.g.
-`qrcode.react`'s `QRCodeSVG`, can wrap that payload; it's shown as copyable text
-for now because the dependency couldn't be installed where this was built.)
+**Pairing UI:** **Settings → Sync**. It renders the `{ url, workspace_id, token }`
+payload as a scannable QR (`qrcode.react`'s `QRCodeSVG`) — the exact JSON the
+phone's QR scanner reads — with the raw payload shown below as a copyable
+fallback.
 
 Schema is **additive** (`sync_meta`, `sync_oplog`, `sync_row_meta`,
 `applied_ops`, `sync_state`, `sync_shadow`) — existing workspaces are unaffected.
@@ -108,10 +108,10 @@ distinct. Round-trips correctly both between notes and into external editors.
 # Rust (the part to verify):
 cd src-tauri && cargo build && cargo test
 
-# Frontend:
-npm install        # (qrcode.react optional, for the pairing QR)
+# Frontend (this repo uses pnpm — `npm install` breaks on the pnpm layout):
+pnpm install       # qrcode.react is a dependency now (pairing QR)
 npx tsc --noEmit
-npm run tauri dev
+pnpm tauri dev
 
 # End to end: start the relay (../stash_app/server: npm run dev), open Mochi,
 # sidebar → Sync → Pair, scan/enter the payload on the phone, then edit on each

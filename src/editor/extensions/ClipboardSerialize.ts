@@ -1,6 +1,6 @@
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import type { Slice } from "@tiptap/pm/model";
+import { Slice } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 
 const key = new PluginKey("mochiClipboardSerialize");
@@ -47,18 +47,22 @@ export function sliceToMarkdown(editor: any, slice: Slice): string {
 }
 
 /**
- * The slice + text/plain payload we last wrote on copy/cut, tagged with the
- * originating editor. On paste, if the clipboard's text/plain still matches
- * this verbatim AND it came from the same editor, we reuse the slice directly
- * instead of round-tripping through markdown — so pasting back into the same
- * note preserves bullets, list nesting, and empty lines exactly. This mirrors
- * ProseMirror's own internal copy/paste dedupe (it compares the serialized
- * clipboard against a cached slice); we key on text/plain because we suppress
- * text/html. Any external paste — or a paste into a different editor instance,
- * whose schema may differ — misses the cache and falls through to the proven
- * markdown paste pipeline below.
+ * The slice (as schema-portable JSON) + text/plain payload we last wrote on
+ * copy/cut. On paste, if the clipboard's text/plain still matches this verbatim
+ * we rebuild the slice against the *target* editor's schema and reuse it
+ * instead of round-tripping through markdown — so pasting preserves bullets,
+ * list nesting, and empty lines exactly. It's module-level on purpose: the
+ * cache is shared across every note editor, so a copy in one note pastes
+ * exactly into another. We serialize to JSON (rather than holding the live
+ * Slice) so `Slice.fromJSON` can re-bind the nodes to whichever editor receives
+ * the paste; that also throws cleanly when the copied content has no place in
+ * the target schema (e.g. a canvas block pasted into the flat daily-note
+ * editor), at which point we fall through to the markdown paste pipeline. The
+ * exact text/plain match is the correctness gate — any external paste, or a
+ * paste after the clipboard changed, misses it. We key on text/plain because we
+ * suppress text/html; this mirrors ProseMirror's own copy/paste dedupe.
  */
-let lastCopied: { editor: unknown; text: string; slice: Slice } | null = null;
+let lastCopied: { text: string; sliceJson: unknown } | null = null;
 const normalizeEol = (s: string) => s.replace(/\r\n/g, "\n");
 
 /**
@@ -91,10 +95,10 @@ export const ClipboardSerialize = Extension.create({
       event.preventDefault();
       event.clipboardData.setData("text/plain", md);
       // Intentionally NO text/html — see the doc comment above.
-      // Remember the exact slice so a paste back into this same editor can
-      // reuse it verbatim instead of re-parsing the tight markdown (which
-      // merges adjacent paragraphs and drops empty lines).
-      lastCopied = { editor, text: normalizeEol(md), slice };
+      // Remember the exact slice (as schema-portable JSON) so a later paste
+      // into any note editor can reuse it verbatim instead of re-parsing the
+      // tight markdown (which merges adjacent paragraphs and drops empty lines).
+      lastCopied = { text: normalizeEol(md), sliceJson: slice.toJSON() };
       if (isCut) {
         view.dispatch(state.tr.deleteSelection().scrollIntoView());
       }
@@ -117,22 +121,34 @@ export const ClipboardSerialize = Extension.create({
           transformPastedText: (text: string) => {
             if (!/\n[ \t]*\n/.test(text)) return text;
             return text.replace(/(\n[ \t]*){2,}/g, (m) => {
+              // A run of N newlines is one paragraph break plus (N - 2) blank
+              // lines the user actually typed; emit the break, then one NBSP
+              // paragraph per extra blank line. (N - 1 here would inject a
+              // spurious empty paragraph at every normal paragraph break.)
               const newlines = (m.match(/\n/g) || []).length;
-              const blanks = Math.max(0, newlines - 1);
+              const blanks = Math.max(0, newlines - 2);
               return "\n\n" + `${NBSP}\n\n`.repeat(blanks);
             });
           },
-          // Paste back into the same editor: if the clipboard still holds
-          // exactly what we copied from here, replace the selection with the
-          // cached slice so structure (bullets, nesting, blank lines) survives
-          // intact. Otherwise return false to let the markdown paste run.
+          // Exact in-app paste: if the clipboard still holds exactly what we
+          // copied (from any note), rebuild that slice against THIS editor's
+          // schema and replace the selection with it, so structure (bullets,
+          // nesting, blank lines) survives intact. If the copied content has no
+          // place in the target schema, fromJSON / replaceSelection throws and
+          // we fall through to the markdown paste pipeline.
           handlePaste: (view, event) => {
             const cd = (event as ClipboardEvent).clipboardData;
-            if (!cd || !lastCopied || lastCopied.editor !== editor) return false;
+            if (!cd || !lastCopied) return false;
             const incoming = normalizeEol(cd.getData("text/plain"));
             if (!incoming || incoming !== lastCopied.text) return false;
-            const { state } = view;
-            view.dispatch(state.tr.replaceSelection(lastCopied.slice).scrollIntoView());
+            let tr;
+            try {
+              const slice = Slice.fromJSON(view.state.schema, lastCopied.sliceJson as any);
+              tr = view.state.tr.replaceSelection(slice).scrollIntoView();
+            } catch {
+              return false;
+            }
+            view.dispatch(tr);
             event.preventDefault();
             return true;
           },

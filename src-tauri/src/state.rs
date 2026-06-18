@@ -111,7 +111,12 @@ impl AppState {
     pub fn reopen_db(&self) -> Result<()> {
         let mut guard = self.inner.lock();
         let ws = guard.as_mut().ok_or(AppError::NoWorkspace)?;
-        ws.db = db::open(&ws.root)?;
+        let conn = db::open(&ws.root)?;
+        // A restored backup may predate the sync feature (no sync tables) — the
+        // additive sync schema must be reapplied or the background sync loop and
+        // sync_* commands break against the reopened DB.
+        crate::sync::apply_sync_schema(&conn)?;
+        ws.db = conn;
         Ok(())
     }
 

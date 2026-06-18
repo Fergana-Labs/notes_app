@@ -7,7 +7,6 @@ import {
   Hash,
 } from "lucide-react";
 import { TagsPane } from "./TagsPane";
-import { SyncButton } from "../sync/SyncPanel";
 import { CoachButton } from "../coach/CoachPanel";
 import { DailyNotesList } from "./DailyNotesList";
 import { SearchResultsPane } from "./SearchResultsPane";
@@ -157,7 +156,6 @@ export function Sidebar({
         <span>Settings</span>
       </button>
       <div className="flex items-center gap-2 px-3 py-2 border-t border-neutral-200 dark:border-neutral-800">
-        <SyncButton />
         <CoachButton />
       </div>
     </aside>

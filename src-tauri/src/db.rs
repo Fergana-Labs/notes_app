@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS blocks (
   pinned INTEGER NOT NULL DEFAULT 0,
   title TEXT,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_blocks_position ON blocks(position);
@@ -1258,10 +1259,11 @@ pub fn heal_strip_inline_tags(conn: &mut Connection) -> Result<()> {
                pinned INTEGER NOT NULL DEFAULT 0,
                title TEXT,
                created_at INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL
+               updated_at INTEGER NOT NULL,
+               deleted_at INTEGER
              );
-             INSERT INTO blocks_new(id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at)
-               SELECT id, parent_id, position, heading, heading_level, content, content_hash, COALESCE(pinned, 0), NULL, created_at, updated_at FROM blocks;
+             INSERT INTO blocks_new(id, parent_id, position, heading, heading_level, content, content_hash, pinned, title, created_at, updated_at, deleted_at)
+               SELECT id, parent_id, position, heading, heading_level, content, content_hash, COALESCE(pinned, 0), NULL, created_at, updated_at, deleted_at FROM blocks;
              DROP TABLE blocks;
              ALTER TABLE blocks_new RENAME TO blocks;
              CREATE INDEX IF NOT EXISTS idx_blocks_position ON blocks(position);
