@@ -8,36 +8,42 @@ const key = new PluginKey("mochiClipboardSerialize");
 const NBSP = " ";
 
 /**
- * Serialize a selection slice to clean markdown with NO blank line
- * between rows. Each top-level node becomes one chunk; chunks join with a
- * single newline so a few short paragraphs / list items don't land
- * double-spaced when pasted into another app.
+ * Serialize a selection slice to markdown that preserves the document's
+ * structure: each block-level node (paragraph, list, heading, …) becomes one
+ * chunk, and chunks join with a BLANK line so adjacent paragraphs stay
+ * distinct rather than merging. Empty paragraphs and empty list items are kept
+ * (as empty chunks) so intentional blank lines and empty bullets survive a
+ * copy → paste round trip — both between notes in the app and into external
+ * editors. (The earlier version stripped trailing whitespace, dropped empty
+ * chunks, and joined with a single newline, which silently lost blank lines
+ * and empty bullets and ran paragraphs together.)
  */
-function sliceToMarkdown(editor: any, slice: Slice): string {
+export function sliceToMarkdown(editor: any, slice: Slice): string {
   const serializer = editor.storage?.markdown?.serializer;
   if (!serializer) {
     return slice.content.textBetween(0, slice.content.size, "\n");
   }
-  const parts: string[] = [];
-  slice.content.forEach((node: any) => {
+  const blocks: string[] = [];
+  const pushNode = (node: any) => {
+    let md: string;
     try {
-      if (node.type.name === "mochiBlock") {
-        const chunks: string[] = [];
-        node.content.forEach((child: any) => {
-          const md: string = serializer.serialize(child).replace(/\s+$/, "");
-          if (md) chunks.push(md);
-        });
-        if (chunks.length > 0) parts.push(chunks.join("\n"));
-      } else {
-        const md: string = serializer.serialize(node).replace(/\s+$/, "");
-        if (md) parts.push(md);
-      }
+      md = serializer.serialize(node);
     } catch {
-      const fallback = node.textContent;
-      if (fallback) parts.push(fallback);
+      md = node.textContent ?? "";
+    }
+    // Drop only the serializer's trailing newlines, not the content — keep
+    // empty results so blank paragraphs / empty bullets aren't lost.
+    blocks.push(md.replace(/\n+$/, ""));
+  };
+  slice.content.forEach((node: any) => {
+    if (node.type.name === "mochiBlock") {
+      // Canvas block: its children are the block-level content.
+      node.content.forEach(pushNode);
+    } else {
+      pushNode(node);
     }
   });
-  return parts.join("\n");
+  return blocks.join("\n\n");
 }
 
 /**
