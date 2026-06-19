@@ -22,7 +22,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: https://asset.localhost; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost https://stash-relay.onrender.com http://localhost:3001; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: asset: https://asset.localhost; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420 http://localhost:3001 https://stash-relay.onrender.com; object-src 'none'"
     }
   },
   "bundle": {

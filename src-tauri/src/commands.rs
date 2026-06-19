@@ -342,21 +342,51 @@ pub fn save_daily_note(
     state.with(|ws| db::save_daily_note(&ws.db, &date, &content))
 }
 
+/// Document-like extensions this command is allowed to write. Exports are the
+/// only legitimate use, so restricting the suffix blocks the renderer (e.g. via
+/// an XSS) from overwriting `~/.zshrc`, a LaunchAgent `.plist`, etc.
+const EXPORT_EXTENSIONS: &[&str] = &["md", "markdown", "txt", "json", "csv", "html"];
+
 /// Write a UTF-8 text file at `path`. Used for ad-hoc exports (e.g. dumping
-/// selected blocks to a markdown file picked via the save dialog).
+/// selected blocks to a markdown file picked via the save dialog). The path is
+/// renderer-supplied, so we refuse anything but a known document extension to
+/// keep this from being an arbitrary-file-write primitive.
 #[tauri::command]
 pub fn write_text_file(path: String, content: String) -> Result<()> {
+    let ext = PathBuf::from(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    let allowed = ext.as_deref().map(|e| EXPORT_EXTENSIONS.contains(&e)).unwrap_or(false);
+    if !allowed {
+        return Err(crate::error::AppError::Other(
+            "refused: write_text_file only allows document exports (.md/.txt/.json/.csv/.html)".into(),
+        ));
+    }
     std::fs::write(PathBuf::from(&path), content)?;
     Ok(())
 }
 
+/// Keys the generic settings IPC must not touch. `sync.*` holds the relay token
+/// and URL — keeping them out of the catch-all read/write commands means the
+/// renderer can only get/set them through the dedicated, audited sync commands.
+fn is_protected_setting(key: &str) -> bool {
+    key.starts_with("sync.")
+}
+
 #[tauri::command]
 pub fn get_setting(key: String, state: State<'_, AppState>) -> Result<Option<String>> {
+    if is_protected_setting(&key) {
+        return Err(crate::error::AppError::Other("refused: protected setting".into()));
+    }
     state.with(|ws| db::get_setting(&ws.db, &key))
 }
 
 #[tauri::command]
 pub fn set_setting(key: String, value: String, state: State<'_, AppState>) -> Result<()> {
+    if is_protected_setting(&key) {
+        return Err(crate::error::AppError::Other("refused: protected setting".into()));
+    }
     state.with(|ws| db::set_setting(&ws.db, &key, &value))
 }
 

@@ -15,7 +15,8 @@ function pairPayload(p: { url: string; workspace_id: string; token: string }): s
 
 export function SyncTab() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
-  const [relayUrl, setRelayUrl] = useState("http://localhost:3001");
+  const [relayUrl, setRelayUrl] = useState("https://stash-relay.onrender.com");
+  const [pairingSecret, setPairingSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -28,7 +29,7 @@ export function SyncTab() {
     setBusy(true);
     setMsg("");
     try {
-      await ipc.syncPair(relayUrl.trim());
+      await ipc.syncPair(relayUrl.trim(), pairingSecret.trim());
       await refresh();
     } catch (e) {
       setMsg(`Pair failed: ${String(e)}`);
@@ -76,7 +77,15 @@ export function SyncTab() {
           <input
             value={relayUrl}
             onChange={(e) => setRelayUrl(e.target.value)}
-            placeholder="Relay URL"
+            placeholder="Relay URL (https://…)"
+            className="w-full text-sm px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent"
+          />
+          <input
+            value={pairingSecret}
+            onChange={(e) => setPairingSecret(e.target.value)}
+            placeholder="Pairing secret (from the relay)"
+            type="password"
+            autoComplete="off"
             className="w-full text-sm px-2 py-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent"
           />
           <button onClick={pair} disabled={busy} className={btn}>

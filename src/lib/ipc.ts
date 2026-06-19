@@ -200,7 +200,8 @@ export const ipc = {
     invoke<StoredBlock[]>("remove_tag_from_block", { blockId, tagName }),
 
   // --- sync (relay) ---
-  syncPair: (relayUrl: string) => invoke<PairInfo>("sync_pair", { relayUrl }),
+  syncPair: (relayUrl: string, pairingSecret?: string) =>
+    invoke<PairInfo>("sync_pair", { relayUrl, pairingSecret: pairingSecret || null }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncUnpair: () => invoke<void>("sync_unpair"),
   syncTick: () => invoke<SyncStats>("sync_tick"),

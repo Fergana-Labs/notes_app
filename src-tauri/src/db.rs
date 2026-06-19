@@ -664,6 +664,29 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// FTS5 `snippet()` copies matched note content verbatim and only inserts the
+/// highlight markers — it does NOT HTML-escape. The renderer injects the result
+/// with `dangerouslySetInnerHTML`, so note content containing `<img onerror=…>`
+/// etc. would execute. We use control-char sentinels (\x01/\x02) as the markers,
+/// HTML-escape everything, then turn the sentinels into <mark> tags. Result: the
+/// only HTML in the snippet is our own <mark>; all note content is inert text.
+fn highlight_snippet(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 16);
+    for ch in raw.chars() {
+        match ch {
+            '\u{1}' => out.push_str("<mark>"),
+            '\u{2}' => out.push_str("</mark>"),
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 pub fn search(
     conn: &Connection,
     query: &str,
@@ -681,14 +704,14 @@ pub fn search(
     let literal = query.trim();
     let mut stmt = if case_sensitive {
         conn.prepare(
-            "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
+            "SELECT b.id, b.heading, snippet(blocks_fts, 1, char(1), char(2), '…', 12) AS snip
              FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
              WHERE blocks_fts MATCH ?1 AND instr(b.content, ?3) > 0 AND b.deleted_at IS NULL
              ORDER BY rank LIMIT ?2",
         )?
     } else {
         conn.prepare(
-            "SELECT b.id, b.heading, snippet(blocks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
+            "SELECT b.id, b.heading, snippet(blocks_fts, 1, char(1), char(2), '…', 12) AS snip
              FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.id
              WHERE blocks_fts MATCH ?1 AND b.deleted_at IS NULL ORDER BY rank LIMIT ?2",
         )?
@@ -698,7 +721,7 @@ pub fn search(
             Ok(SearchHit {
                 id: row.get(0)?,
                 heading: row.get(1)?,
-                snippet: row.get(2)?,
+                snippet: highlight_snippet(&row.get::<_, String>(2)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?
@@ -707,7 +730,7 @@ pub fn search(
             Ok(SearchHit {
                 id: row.get(0)?,
                 heading: row.get(1)?,
-                snippet: row.get(2)?,
+                snippet: highlight_snippet(&row.get::<_, String>(2)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?

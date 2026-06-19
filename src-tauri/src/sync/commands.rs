@@ -25,13 +25,36 @@ pub struct SyncStatus {
     pub device_id: Option<String>,
 }
 
+/// Reject non-HTTPS relay URLs except loopback, so the bearer token is never
+/// sent in cleartext to a remote host.
+fn require_secure_relay(relay_url: &str) -> Result<()> {
+    let lower = relay_url.trim().to_ascii_lowercase();
+    let is_https = lower.starts_with("https://");
+    let is_loopback = lower.starts_with("http://localhost")
+        || lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("http://[::1]");
+    if is_https || is_loopback {
+        Ok(())
+    } else {
+        Err(crate::error::AppError::Other(
+            "relay URL must use https:// (only localhost may use http://)".into(),
+        ))
+    }
+}
+
 /// Pair this (owner) device with the relay, minting a new workspace, and store
 /// the credentials. Returns the QR payload for the phone to scan.
 #[tauri::command]
-pub async fn sync_pair(relay_url: String, state: State<'_, AppState>) -> Result<PairInfo> {
+pub async fn sync_pair(
+    relay_url: String,
+    pairing_secret: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<PairInfo> {
+    require_secure_relay(&relay_url)?;
     let device = state.with(|ws| oplog::device_id(&ws.db))?;
     let http = reqwest::Client::new();
-    let (workspace_id, token) = client::pair(&http, &relay_url, &device, None).await?;
+    let (workspace_id, token) =
+        client::pair(&http, &relay_url, &device, None, pairing_secret.as_deref()).await?;
     state.with(|ws| {
         crate::db::set_setting(&ws.db, "sync.relay_url", &relay_url)?;
         crate::db::set_setting(&ws.db, "sync.workspace_id", &workspace_id)?;

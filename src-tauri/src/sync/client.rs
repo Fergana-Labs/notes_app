@@ -53,13 +53,16 @@ pub async fn pair(
     relay_url: &str,
     device_id: &str,
     workspace_id: Option<&str>,
+    pairing_secret: Option<&str>,
 ) -> Result<(String, String)> {
-    let res = http
+    let mut req = http
         .post(format!("{relay_url}/pair"))
-        .json(&serde_json::json!({ "device_id": device_id, "workspace_id": workspace_id }))
-        .send()
-        .await
-        .map_err(net_err)?;
+        .json(&serde_json::json!({ "device_id": device_id, "workspace_id": workspace_id }));
+    // The relay requires this secret so strangers can't mint workspaces.
+    if let Some(secret) = pairing_secret.filter(|s| !s.is_empty()) {
+        req = req.header("x-pairing-secret", secret);
+    }
+    let res = req.send().await.map_err(net_err)?;
     if !res.status().is_success() {
         return Err(AppError::Other(format!("pair failed: {}", res.status())));
     }
